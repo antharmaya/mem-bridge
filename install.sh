@@ -8,7 +8,7 @@ set -euo pipefail
 # Installs the unified agent memory plugin for Hermes Agent.
 # Gives Hermes photographic memory of every AI conversation you've ever had.
 
-REPO_URL="https://github.com/antharmaya-labs/hermes-memory-bridge.git"
+REPO_URL="https://github.com/antharmaya/mem-bridge.git"
 REPO_DIR="${HOME}/.hermes/plugins/memory/antharmaya-bridge"
 VERSION="${VERSION:-v0.1.1}"
 
