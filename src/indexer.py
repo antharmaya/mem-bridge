@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import struct
 import time
@@ -101,7 +102,7 @@ SCHEMA_MIGRATIONS = {
             decision_text TEXT NOT NULL,               -- WHAT we decided
             -- Rationale (the WHY)
             rationale TEXT,                            -- why this choice over alternatives
-            framework_used TEXT,                       -- which DDIA/AgentOps pattern applied
+            framework_used TEXT,                       -- which decision framework applied
             alternatives_considered TEXT,              -- JSON array of rejected options
             constraints TEXT,                          -- what shaped the decision (budget, time, etc.)
             -- Provenance
@@ -130,21 +131,21 @@ SCHEMA_MIGRATIONS = {
         CREATE TABLE IF NOT EXISTS frameworks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
-            source_book TEXT,
+            discipline TEXT,
             description TEXT
         );
 
-        -- Seed DDIA frameworks
-        INSERT OR IGNORE INTO frameworks (name, source_book, description)
-        VALUES ('tradeoff_matrix', 'DDIA Ch.1', 'Systematic trade-off analysis: cloud vs self-host, consistency vs availability');
-        INSERT OR IGNORE INTO frameworks (name, source_book, description)
-        VALUES ('failure_modes', 'DDIA Ch.9', 'Failure mode analysis: network, clock, Byzantine faults');
-        INSERT OR IGNORE INTO frameworks (name, source_book, description)
-        VALUES ('end_to_end', 'DDIA Ch.13', 'End-to-end argument: trust-but-verify principle for distributed systems');
-        INSERT OR IGNORE INTO frameworks (name, source_book, description)
-        VALUES ('ethics_triage', 'DDIA Ch.14', 'Data minimization, consent, privacy impact triage');
-        INSERT OR IGNORE INTO frameworks (name, source_book, description)
-        VALUES ('agentops_trajectory', 'Google Agent Guide', 'Agent reasoning trajectory evaluation and confidence calibration');
+        -- Seed decision frameworks (generic engineering/AgentOps disciplines)
+        INSERT OR IGNORE INTO frameworks (name, discipline, description)
+        VALUES ('tradeoff_matrix', 'Systems trade-off analysis', 'Systematic trade-off analysis: cloud vs self-host, consistency vs availability');
+        INSERT OR IGNORE INTO frameworks (name, discipline, description)
+        VALUES ('failure_modes', 'Distributed failure analysis', 'Failure mode analysis: network, clock, and Byzantine faults');
+        INSERT OR IGNORE INTO frameworks (name, discipline, description)
+        VALUES ('end_to_end', 'End-to-end integrity', 'End-to-end verification: trust-but-verify principle for distributed systems');
+        INSERT OR IGNORE INTO frameworks (name, discipline, description)
+        VALUES ('ethics_triage', 'Privacy & ethics review', 'Data minimization, consent, and privacy impact triage');
+        INSERT OR IGNORE INTO frameworks (name, discipline, description)
+        VALUES ('agentops_trajectory', 'Agent trajectory evaluation', 'Agent reasoning trajectory evaluation and confidence calibration');
 
         -- Backfill existing decision entries from entries table
         INSERT OR IGNORE INTO structured_decisions (
@@ -346,23 +347,150 @@ class MemoryIndex:
         ).fetchone()
         return row is not None
 
+    # ─── Structured decisions (the Decide → Remember → Verify loop) ──────────
+
+    def upsert_decision(
+        self,
+        decision_text: str,
+        *,
+        agent_source: str,
+        rationale: str | None = None,
+        framework_used: str | None = None,
+        alternatives: list[str] | str | None = None,
+        constraints: str | None = None,
+        session_id: str | None = None,
+        decision_log_id: str | None = None,
+        confidence: float = 1.0,
+    ) -> int:
+        """Insert/refresh a structured decision (dedup by content hash).
+
+        This is the Memory Bridge half of the decision loop: decisions
+        surfaced from agent conversations are stored with their rationale,
+        the framework that shaped them, and a slot for later outcome
+        verification. Returns the structured_decisions row id.
+        """
+        decision_text = (decision_text or "").strip()
+        if len(decision_text) < 3:
+            raise ValueError(f"decision_text must be at least 3 characters, got: {decision_text!r}")
+        confidence = max(0.0, min(1.0, float(confidence)))
+        if isinstance(alternatives, list):
+            alternatives = json.dumps(alternatives)
+
+        content_hash = self.hash_content(decision_text)
+        now = datetime.now(timezone.utc).isoformat()
+
+        existing = self.conn.execute(
+            "SELECT id FROM structured_decisions WHERE content_hash = ?",
+            (content_hash,),
+        ).fetchone()
+        if existing:
+            decision_id = existing[0]
+            # Enrich an existing record without clobbering known values.
+            self.conn.execute("""
+                UPDATE structured_decisions SET
+                    rationale = COALESCE(?, rationale),
+                    framework_used = COALESCE(NULLIF(?, 'unknown'), framework_used),
+                    alternatives_considered = COALESCE(?, alternatives_considered),
+                    constraints = COALESCE(?, constraints),
+                    decision_log_id = COALESCE(?, decision_log_id),
+                    confidence = MAX(confidence, ?)
+                WHERE id = ?
+            """, (rationale, framework_used, alternatives, constraints,
+                  decision_log_id, confidence, decision_id))
+        else:
+            cur = self.conn.execute("""
+                INSERT INTO structured_decisions (
+                    content_hash, decision_text, rationale, framework_used,
+                    alternatives_considered, constraints, agent_source, session_id,
+                    decision_log_id, confidence, extracted_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (content_hash, decision_text, rationale, framework_used or "unknown",
+                  alternatives, constraints, agent_source, session_id,
+                  decision_log_id, confidence, now))
+            decision_id = cur.lastrowid
+        self.conn.commit()
+        return decision_id
+
+    def get_decisions(
+        self,
+        limit: int = 50,
+        framework: str | None = None,
+        unverified_only: bool = False,
+    ) -> list[dict]:
+        """Return structured decisions, newest first, as dicts."""
+        clauses, params = ["archived = 0"], []
+        if framework:
+            clauses.append("framework_used = ?")
+            params.append(framework)
+        if unverified_only:
+            clauses.append("outcome_verified = 0")
+        where = " AND ".join(clauses)
+        params.append(limit)
+        cur = self.conn.execute(
+            f"SELECT * FROM structured_decisions WHERE {where} "
+            f"ORDER BY extracted_at DESC LIMIT ?",
+            params,
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def mark_decision_outcome(self, decision_id: int, verified: int, notes: str | None = None) -> bool:
+        """Record how a past decision turned out (the 'Verify' step).
+
+        verified: 1 = worked out, -1 = went badly, 0 = back to unverified.
+        """
+        if verified not in (-1, 0, 1):
+            raise ValueError("verified must be -1, 0, or 1")
+        now = datetime.now(timezone.utc).isoformat()
+        cur = self.conn.execute("""
+            UPDATE structured_decisions
+            SET outcome_verified = ?, outcome_notes = ?, outcome_checked_at = ?
+            WHERE id = ?
+        """, (verified, notes, now, decision_id))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def list_frameworks(self) -> list[dict]:
+        """Return the framework catalog (decision disciplines)."""
+        cur = self.conn.execute(
+            "SELECT name, discipline, description FROM frameworks ORDER BY name"
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
     # ─── Search ───────────────────────────────────────────────────────────
 
+    _FTS_SELECT = """
+        SELECT e.id, e.content, e.category, e.source_agent, e.source_session,
+               e.importance, e.created_at, e.last_referenced, e.reference_count,
+               e.tags, e.metadata
+        FROM entries_fts f
+        JOIN entries e ON f.rowid = e.id
+        WHERE entries_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+    """
+
     def search_fts(self, query: str, limit: int = 20) -> list[MemoryEntry]:
-        """Full-text search using FTS5 with trigram tokenizer."""
+        """Full-text search using FTS5 with trigram tokenizer.
+
+        Exact (substring) matches are tried first. If they return nothing,
+        a trigram-decomposition fuzzy pass runs so typos and transpositions
+        still surface results (e.g. "clouflare" → "cloudflare").
+        """
         # Escape FTS5 special characters and handle multi-word queries
         safe_query = _escape_fts5_query(query)
         try:
-            rows = self.conn.execute("""
-                SELECT e.id, e.content, e.category, e.source_agent, e.source_session,
-                       e.importance, e.created_at, e.last_referenced, e.reference_count,
-                       e.tags, e.metadata
-                FROM entries_fts f
-                JOIN entries e ON f.rowid = e.id
-                WHERE entries_fts MATCH ?
-                ORDER BY rank
-                LIMIT ?
-            """, (safe_query, limit)).fetchall()
+            rows = self.conn.execute(self._FTS_SELECT, (safe_query, limit)).fetchall()
+
+            # Typo-tolerant fallback: decompose into overlapping trigrams and
+            # OR-match. Trigram tokenizer needs no extra deps for this.
+            if not rows and query.strip():
+                fuzzy_query = _trigram_fuzzy_query(query)
+                if fuzzy_query:
+                    rows = self.conn.execute(
+                        self._FTS_SELECT, (fuzzy_query, limit)
+                    ).fetchall()
         except Exception:
             # If FTS5 syntax error, fall back to LIKE search
             like_query = f"%{query.replace('%', '%%')}%"
@@ -537,9 +665,10 @@ class MemoryIndex:
         import_path = Path(import_path)
         target_path = Path(target_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
+        dest = target_path.parent
 
         with tarfile.open(str(import_path), "r:gz") as tar:
-            tar.extractall(path=target_path.parent)
+            _safe_extractall(tar, dest)
 
         return cls(target_path)
 
@@ -560,6 +689,19 @@ class MemoryIndex:
             by_source[row[0]] = row[1]
         processed = self.conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
 
+        # Structured decisions (present from schema v3 onward).
+        total_decisions = 0
+        verified_decisions = 0
+        try:
+            total_decisions = self.conn.execute(
+                "SELECT COUNT(*) FROM structured_decisions WHERE archived = 0"
+            ).fetchone()[0]
+            verified_decisions = self.conn.execute(
+                "SELECT COUNT(*) FROM structured_decisions WHERE outcome_verified != 0 AND archived = 0"
+            ).fetchone()[0]
+        except sqlite3.OperationalError:
+            pass  # Pre-v3 index — table not present yet.
+
         # Schema info
         schema_version = self._get_user_version()
         hash_algo = "sha256_16"
@@ -577,6 +719,8 @@ class MemoryIndex:
             "by_category": by_category,
             "by_source": by_source,
             "processed_sessions": processed,
+            "total_decisions": total_decisions,
+            "verified_decisions": verified_decisions,
             "schema_version": schema_version,
             "hash_algorithm": hash_algo,
         }
@@ -635,6 +779,48 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+def _trigram_fuzzy_query(query: str) -> str:
+    """Build a typo-tolerant FTS5 query by OR-ing overlapping trigrams.
+
+    The trigram tokenizer indexes every 3-char window, so OR-ing a misspelled
+    term's trigrams matches entries that share most of them. Results are ranked
+    by FTS5 rank, so the closest match floats to the top.
+    """
+    import re as _re
+    terms = [t for t in _re.findall(r'\w+', query.lower()) if len(t) >= 3]
+    trigrams: set[str] = set()
+    for t in terms:
+        for i in range(len(t) - 2):
+            trigrams.add(t[i:i + 3])
+    if not trigrams:
+        return ""
+    return " OR ".join(f'"{tg}"' for tg in sorted(trigrams))
+
+
+def _safe_extractall(tar, dest: str | Path) -> None:
+    """Extract a tarball, rejecting members that escape ``dest``.
+
+    Guards against the CVE-2007-4559 path-traversal class: absolute paths,
+    ``..`` traversal, and links pointing outside the destination directory.
+    Prefers the stdlib ``data`` filter (Python 3.12+/3.11.4+) and validates
+    members explicitly so older runtimes are still protected.
+    """
+    dest = Path(dest).resolve()
+    for member in tar.getmembers():
+        member_path = (dest / member.name).resolve()
+        if os.path.commonpath([str(dest), str(member_path)]) != str(dest):
+            raise ValueError(f"Unsafe path in archive (path traversal): {member.name!r}")
+        if member.islnk() or member.issym():
+            link_target = (dest / member.linkname).resolve()
+            if os.path.commonpath([str(dest), str(link_target)]) != str(dest):
+                raise ValueError(f"Unsafe link in archive: {member.name!r} -> {member.linkname!r}")
+    try:
+        tar.extractall(path=str(dest), filter="data")  # type: ignore[call-arg]
+    except TypeError:
+        # Runtime predates the ``filter`` keyword; members already validated above.
+        tar.extractall(path=str(dest))
 
 
 def _escape_fts5_query(query: str) -> str:

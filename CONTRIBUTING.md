@@ -94,7 +94,7 @@ Open a pull request with your new scanner. That's it!
 
 ```bash
 # Clone the repo
-git clone https://github.com/antharmaya-labs/hermes-memory-bridge.git
+git clone https://github.com/antharmaya/mem-bridge.git
 cd hermes-memory-bridge
 
 # Install dev dependencies
@@ -115,5 +115,5 @@ python3 -m pytest tests/ -v
 
 ## Questions?
 
-Open an issue at [github.com/antharmaya-labs/hermes-memory-bridge](https://github.com/antharmaya-labs/hermes-memory-bridge)
+Open an issue at [github.com/antharmaya/mem-bridge](https://github.com/antharmaya/mem-bridge)
 or join the [Hermes Discord](https://discord.gg/hermes-agent).

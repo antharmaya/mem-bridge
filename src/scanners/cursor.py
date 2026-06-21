@@ -3,6 +3,7 @@ Cursor IDE scanner — plans + AI tracking data.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import sqlite3
 from pathlib import Path
@@ -62,9 +63,16 @@ def scan_cursor(home: Path) -> Iterator[Session]:
                         logger.warning("Failed to read Cursor DB table: %s", table_name, exc_info=True)
                         continue
                 if content_parts:
+                    # Content-hash-based session_id: changes when the tracking
+                    # DB changes, so new activity is re-scanned (was a fixed id
+                    # that got marked processed once and never re-imported).
+                    db_stat = tracking_db.stat()
+                    session_id = hashlib.sha256(
+                        f"{tracking_db}:{db_stat.st_mtime}:{db_stat.st_size}".encode()
+                    ).hexdigest()[:16]
                     yield Session(
                         source="cursor",
-                        session_id="cursor-ai-tracking",
+                        session_id=session_id,
                         messages=[Message(
                             role="system",
                             content="Cursor AI Tracking:\n" + "\n".join(content_parts),

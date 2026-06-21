@@ -73,7 +73,7 @@ Memory Bridge classifies every fact into one of six categories:
 │                             ▼                                │
 │                    ┌─────────────────┐                       │
 │                    │   EXTRACTOR     │  Rules-based (free)   │
-│                    │  + LLM (opt)    │  or DeepSeek V4       │
+│                    │  + LLM (opt)    │  via ctx.llm          │
 │                    └────────┬────────┘                       │
 │                             ▼                                │
 │                    ┌─────────────────┐                       │
@@ -89,7 +89,7 @@ Memory Bridge classifies every fact into one of six categories:
 ```
 
 1. **Scan** — Discovers all agent histories on disk
-2. **Extract** — Rules-based extraction (free) catches decisions, preferences, lessons. Optional LLM pass (DeepSeek V4 Pro) for deep semantic extraction
+2. **Extract** — Rules-based extraction (free) catches decisions, preferences, lessons. Optional LLM pass for deep semantic extraction — uses your Hermes model via `ctx.llm`, no separate API key needed
 3. **Index** — SQLite with FTS5 full-text search. Sub-millisecond queries. Zero external services
 4. **Retrieve** — Hermes queries the index on every turn via `prefetch()`. Relevant memories are injected into context automatically
 
@@ -102,6 +102,7 @@ Memory Bridge classifies every fact into one of six categories:
 ```
 /memory_bridge_stats                    # See what's been consolidated
 /memory_bridge_search "razorpay auth"   # Search all agent memories
+/memory_bridge_decisions                # Review structured decisions + outcomes
 /memory_bridge_scan                     # Re-scan for new conversations
 ```
 
@@ -110,6 +111,7 @@ Or use the CLI:
 ```bash
 hermes memory-bridge scan               # Scan for new agent histories
 hermes memory-bridge search "deploy"    # Search your unified memory
+hermes memory-bridge decisions          # List structured decisions + outcomes
 hermes memory-bridge stats              # Show memory statistics
 ```
 
@@ -141,7 +143,7 @@ Clones into `~/.hermes/plugins/memory/antharmaya-bridge/`, installs deps, runs i
 
 ### Method 2: Manual (git clone)
 ```bash
-git clone https://github.com/antharmaya-labs/hermes-memory-bridge.git \
+git clone https://github.com/antharmaya/mem-bridge.git \
   ~/.hermes/plugins/memory/antharmaya-bridge
 ```
 Memory providers must live in `~/.hermes/plugins/memory/<name>/` — this is the Hermes convention for provider discovery.
@@ -182,17 +184,18 @@ If running standalone (without Hermes), set an API key for the fallback DirectEn
 ```bash
 export MEMORY_BRIDGE_API_KEY="sk-or-v1-..."   # OpenRouter
 # or
-export DEEPSEEK_API_KEY="sk-..."              # DeepSeek direct
+export OPENROUTER_API_KEY="sk-or-v1-..."       # OpenRouter
 ```
 
 ---
 
 ## Privacy
 
-- **Everything runs locally.** No data leaves your machine
-- **No telemetry.** No analytics. No phoning home
-- **Read-only.** Memory Bridge never modifies your agent histories — only marks them as "processed" in its own index
-- **You own your data.** The index is a SQLite file in `~/.hermes/antharmaya-memory/`
+- **Local by default.** Scanning, rules-based extraction, and the index are 100% local — the SQLite index never leaves your machine.
+- **You choose where LLM extraction runs.** The optional deep-extraction pass sends conversation text to *whatever model you've already configured in Hermes* via `ctx.llm`. Point Hermes at a local model and it stays fully offline; point it at a cloud provider and that text goes there — your call. The standalone `DirectEngine` fallback only activates if you set an API key.
+- **No telemetry.** No analytics. No phoning home — Memory Bridge makes zero network calls of its own.
+- **Read-only.** Memory Bridge never modifies your agent histories — only marks them as "processed" in its own index.
+- **You own your data.** The index is a SQLite file in `~/.hermes/antharmaya-memory/`.
 
 ---
 

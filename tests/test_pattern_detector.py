@@ -27,8 +27,8 @@ class TestPatternDetector:
         assert score == 0, f"Expected 0, got {score}"
         assert len(matches) == 0
 
-    def test_ddia_pattern_name_high_weight(self):
-        """DDIA pattern names (trade-off matrix) should get max weight."""
+    def test_framework_pattern_name_high_weight(self):
+        """Framework pattern names (trade-off matrix) should get max weight."""
         detector = PatternDetector()
         text = "This is a trade-off matrix situation for our architecture"
         score, matches = detector.scan(text)

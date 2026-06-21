@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Weight 1 is supporting evidence.
 
 DEFAULT_PATTERNS: dict[str, int] = {
-    # DDIA pattern names — highest weight (4 points)
+    # Decision-framework pattern names — highest weight (4 points)
     "trade-off matrix": 4,
     "tradeoff matrix": 4,
     "trade-off": 3,

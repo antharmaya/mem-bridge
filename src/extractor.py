@@ -3,7 +3,7 @@ LLM-powered consolidation engine.
 
 Two extraction strategies:
 1. PluginLlmEngine — uses ctx.llm (Hermes host model), zero config, no API key
-2. DirectEngine — uses OpenRouter/DeepSeek API directly (fallback)
+2. DirectEngine — uses an LLM API directly (fallback, optional)
 
 Plus FastExtractor for rules-based extraction (always available, free).
 
@@ -294,9 +294,9 @@ class PluginLlmEngine:
 # ─── DirectEngine — uses API directly (fallback) ────────────────────────
 
 class DirectEngine:
-    """Extraction engine using direct API calls (OpenRouter/DeepSeek).
+    """Extraction engine using direct API calls (bring your own LLM key).
 
-    Requires MEMORY_BRIDGE_API_KEY, DEEPSEEK_API_KEY, or OPENROUTER_API_KEY.
+    Requires MEMORY_BRIDGE_API_KEY or OPENROUTER_API_KEY.
     Used as fallback when ctx.llm is unavailable.
     """
 
@@ -304,9 +304,9 @@ class DirectEngine:
         self,
         api_key: str | None = None,
         base_url: str | None = None,
-        model: str = "deepseek/deepseek-v4-pro",
+        model: str = "openrouter/auto",
     ):
-        self.api_key = api_key or os.getenv("MEMORY_BRIDGE_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENROUTER_API_KEY") or ""
+        self.api_key = api_key or os.getenv("MEMORY_BRIDGE_API_KEY") or os.getenv("OPENROUTER_API_KEY") or ""
         self.base_url = base_url or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         self.model = model
 
@@ -448,6 +448,23 @@ class FastExtractor:
 
         return entries
 
+    # Substrings that mark machine output (log lines, JSON blobs, stack traces)
+    # rather than durable human knowledge.
+    _NOISE_MARKERS = ('","level":', '","msg":', '"timestamp":', '","ts":',
+                      'traceback (most recent', 'stacktrace', '\\u00')
+
+    @classmethod
+    def _looks_like_noise(cls, sentence: str) -> bool:
+        """Reject sentences that are clearly machine output, not durable facts."""
+        low = sentence.lower()
+        if any(marker in low for marker in cls._NOISE_MARKERS):
+            return True
+        # Mostly-punctuation / structural fragments (JSON, code) — low signal.
+        symbols = sum(1 for c in sentence if c in '{}[]<>|\\=/`"')
+        if symbols > len(sentence) * 0.25:
+            return True
+        return False
+
     @staticmethod
     def _extract_sentence(text: str, pattern: str) -> str | None:
         text_lower = text.lower()
@@ -465,7 +482,7 @@ class FastExtractor:
             end = len(text)
 
         sentence = text[start:end].strip().strip('.,;:')
-        if 15 < len(sentence) < 300:
+        if 15 < len(sentence) < 300 and not FastExtractor._looks_like_noise(sentence):
             return sentence
         return None
 
@@ -586,19 +603,43 @@ def _parse_response(response: str) -> list[dict]:
 
 
 def _facts_to_entries(facts: list[dict], session: Session) -> list[MemoryEntry]:
-    """Convert raw fact dicts to MemoryEntry objects."""
+    """Convert raw fact dicts to MemoryEntry objects.
+
+    LLM output is untrusted: categories are coerced to the valid set and
+    importance is clamped to 0.0-1.0 so a malformed completion can never
+    raise out of the indexer and abort an entire scan.
+    """
+    from .indexer import MemoryIndex
+
     entries = []
     for fact in facts:
-        content = fact.get("content", "").strip()
+        if not isinstance(fact, dict):
+            continue
+        content = (fact.get("content") or "").strip()
         if not content or len(content) < 10:
             continue
+
+        category = str(fact.get("category", "fact")).strip().lower()
+        if category not in MemoryIndex.VALID_CATEGORIES:
+            category = "fact"
+
+        try:
+            importance = float(fact.get("importance", 0.5))
+        except (TypeError, ValueError):
+            importance = 0.5
+        importance = max(0.0, min(1.0, importance))
+
+        tags = fact.get("tags", [])
+        if not isinstance(tags, list):
+            tags = []
+
         entries.append(MemoryEntry(
             content=content,
-            category=fact.get("category", "fact"),
+            category=category,
             source_agent=session.source,
             source_session=session.session_id,
-            importance=float(fact.get("importance", 0.5)),
-            tags=fact.get("tags", []),
+            importance=importance,
+            tags=tags,
             metadata={
                 "project": session.project,
                 "source_file": session.metadata.get("file_path", ""),
@@ -608,3 +649,79 @@ def _facts_to_entries(facts: list[dict], session: Session) -> list[MemoryEntry]:
             },
         ))
     return entries
+
+
+# ─── Structured decision extraction (the "Remember" half of the loop) ─────
+#
+# Decision-category entries are promoted into structured_decisions, with the
+# decision framework inferred from PatternDetector signal phrases. This is
+# what wires PatternDetector + the structured_decisions/frameworks tables into
+# the normal scan flow.
+
+# Highest-weight signal phrases → framework name in the frameworks catalog.
+_FRAMEWORK_PHRASES: dict[str, str] = {
+    "trade-off matrix": "tradeoff_matrix",
+    "tradeoff matrix": "tradeoff_matrix",
+    "trade-off": "tradeoff_matrix",
+    "tradeoff": "tradeoff_matrix",
+    "trade-offs": "tradeoff_matrix",
+    "trade offs": "tradeoff_matrix",
+    "failure modes": "failure_modes",
+    "end-to-end": "end_to_end",
+    "trust but verify": "end_to_end",
+    "privacy impact": "ethics_triage",
+    "data minimization": "ethics_triage",
+    "agent trajectory": "agentops_trajectory",
+}
+
+
+def _infer_framework(matches: list[dict]) -> str:
+    """Pick the framework implied by the highest-weight matched phrase."""
+    best_framework = "unknown"
+    best_weight = -1
+    for m in matches:
+        fw = _FRAMEWORK_PHRASES.get(m.get("phrase", ""))
+        if fw and m.get("weight", 0) > best_weight:
+            best_framework = fw
+            best_weight = m["weight"]
+    return best_framework
+
+
+def extract_structured_decisions(
+    session: Session,
+    entries: list[MemoryEntry],
+    detector: Any = None,
+) -> list[dict]:
+    """Promote decision-category entries to structured decision records.
+
+    Uses PatternDetector to attribute a decision framework and to weight
+    confidence by signal strength. Returns dicts ready for
+    MemoryIndex.upsert_decision().
+    """
+    decision_entries = [e for e in entries if e.category == "decision"]
+    if not decision_entries:
+        return []
+
+    if detector is None:
+        from .extractors.pattern_detector import PatternDetector
+        detector = PatternDetector()
+
+    decisions = []
+    seen: set[str] = set()
+    for entry in decision_entries:
+        text = (entry.content or "").strip()
+        if len(text) < 10 or text in seen:
+            continue
+        seen.add(text)
+        score, matches = detector.scan(text)
+        framework = _infer_framework(matches)
+        # Base confidence on the rules-based importance, nudged by signal score.
+        confidence = max(0.0, min(1.0, round(entry.importance + 0.05 * score, 2)))
+        decisions.append({
+            "decision_text": text,
+            "framework_used": framework,
+            "agent_source": session.source,
+            "session_id": session.session_id,
+            "confidence": confidence,
+        })
+    return decisions

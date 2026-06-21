@@ -7,6 +7,7 @@ Usage:
   memory-bridge search <query>    Search unified memory
   memory-bridge stats             Show memory bridge statistics
   memory-bridge quality           Show extraction quality metrics
+  memory-bridge decisions         List structured decisions consolidated from agents
   memory-bridge consolidate       Deep LLM consolidation of all unscanned sessions
   memory-bridge repair            Repair corrupted index
   memory-bridge export <file>     Export index to tar.gz
@@ -27,7 +28,7 @@ def cmd_scan(args):
     """Scan for new agent conversations and extract facts."""
     from src.scanner import discover_all
     from src.indexer import MemoryIndex
-    from src.extractor import FastExtractor, SmartExtractor
+    from src.extractor import FastExtractor, SmartExtractor, extract_structured_decisions
     from src.config import get_default_db_path
 
     home = Path(args.home) if args.home else Path.home()
@@ -90,6 +91,19 @@ def cmd_scan(args):
             for entry in entries:
                 index.upsert(entry)
 
+            # Promote decisions into the structured_decisions table.
+            for d in extract_structured_decisions(session, entries):
+                try:
+                    index.upsert_decision(
+                        d["decision_text"],
+                        agent_source=d["agent_source"],
+                        framework_used=d["framework_used"],
+                        session_id=d["session_id"],
+                        confidence=d["confidence"],
+                    )
+                except Exception:
+                    pass
+
             index.mark_source_processed(session.source, session.session_id, len(session.messages))
             new += 1
             total_entries += len(entries)
@@ -97,7 +111,7 @@ def cmd_scan(args):
     stats = index.stats()
     print()
     print(f"Done. {new} new sessions processed, {skipped} skipped.")
-    print(f"Total index: {stats['total_entries']} entries")
+    print(f"Total index: {stats['total_entries']} entries, {stats.get('total_decisions', 0)} structured decisions")
     for src, count in sorted(stats.get("by_source", {}).items()):
         print(f"  {src}: {count}")
     print(f"Schema version: {stats.get('schema_version', '?')}")
@@ -169,6 +183,7 @@ def cmd_stats(args):
     print("🧠 Antharmaya Memory Bridge")
     print("=" * 40)
     print(f"Total entries: {stats['total_entries']}")
+    print(f"Structured decisions: {stats.get('total_decisions', 0)} ({stats.get('verified_decisions', 0)} outcome-verified)")
     print(f"Processed sessions: {stats['processed_sessions']}")
     print(f"Schema version: {stats.get('schema_version', '?')}")
     print(f"Hash algorithm: {stats.get('hash_algorithm', 'sha256_16')}")
@@ -193,6 +208,40 @@ def cmd_stats(args):
 
     print()
     print(f"Available scanners: {', '.join(get_available_scanners())}")
+
+    index.close()
+
+
+def cmd_decisions(args):
+    """List structured decisions consolidated from agent conversations."""
+    from src.indexer import MemoryIndex
+    from src.config import get_default_db_path
+
+    db_path = get_default_db_path()
+    if not db_path.exists():
+        print("No memory index found. Run 'memory-bridge scan' first.")
+        return
+
+    index = MemoryIndex(db_path)
+    decisions = index.get_decisions(
+        limit=args.limit,
+        framework=args.framework,
+        unverified_only=args.unverified,
+    )
+    if not decisions:
+        print("No structured decisions found yet. Run 'memory-bridge scan' to consolidate them.")
+        index.close()
+        return
+
+    print(f"Found {len(decisions)} structured decisions:")
+    print()
+    verdict = {1: "✅ worked", -1: "❌ failed", 0: "… unverified"}
+    for i, d in enumerate(decisions, 1):
+        outcome = verdict.get(d.get("outcome_verified", 0), "… unverified")
+        fw = d.get("framework_used") or "unknown"
+        print(f"{i}. [{fw}] ({d.get('agent_source')}) {d.get('decision_text', '')[:160]}")
+        print(f"   confidence: {d.get('confidence')}  |  outcome: {outcome}")
+        print()
 
     index.close()
 
@@ -348,6 +397,13 @@ def main():
     # quality
     quality = sub.add_parser("quality", help="Show extraction quality metrics")
     quality.set_defaults(func=cmd_quality)
+
+    # decisions
+    decisions = sub.add_parser("decisions", help="List structured decisions")
+    decisions.add_argument("--framework", type=str, default=None, help="Filter by framework name")
+    decisions.add_argument("--unverified", action="store_true", help="Only outcome-unverified decisions")
+    decisions.add_argument("--limit", type=int, default=20, help="Max results (default 20)")
+    decisions.set_defaults(func=cmd_decisions)
 
     # repair
     repair = sub.add_parser("repair", help="Repair corrupted index")

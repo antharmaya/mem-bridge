@@ -26,7 +26,7 @@ context into every Hermes session.
 │                                                                   │
 │  SmartExtractor (orchestrator):                                   │
 │    PRIMARY:   PluginLlmEngine (ctx.llm — Hermes host model)       │
-│    SECONDARY: DirectEngine (API key — OpenRouter/DeepSeek)        │
+│    SECONDARY: DirectEngine (API key — bring your own LLM)         │
 │    TERTIARY:  FastExtractor (rules-based, always runs)            │
 │                                                                   │
 │  Low-value session filtering (<3 msgs, all noise → skip LLM)     │
