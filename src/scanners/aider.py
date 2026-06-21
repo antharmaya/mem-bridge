@@ -46,7 +46,7 @@ def _parse_aider_markdown(content: str) -> list[Message]:
     current_content = []
 
     for line in content.split('\n'):
-        if line.startswith('#### ') or line.startswith('### '):
+        if line.startswith('#### ') or line.startswith('### ') or line.startswith('## ') or line.startswith('# '):
             # Save previous block
             if current_role and current_content:
                 text = '\n'.join(current_content).strip()

@@ -3,6 +3,7 @@ OpenCode scanner — prompt history.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -45,9 +46,14 @@ def scan_opencode(home: Path) -> Iterator[Session]:
         return
 
     if messages:
+        # Content-hash-based session_id: changes when file content changes
+        file_stat = history_file.stat()
+        session_id = hashlib.sha256(
+            f"{history_file}:{file_stat.st_mtime}:{file_stat.st_size}".encode()
+        ).hexdigest()[:16]
         yield Session(
             source="opencode",
-            session_id="opencode-history",
+            session_id=session_id,
             messages=messages,
             metadata={"file_path": str(history_file)},
         )
