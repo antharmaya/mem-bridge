@@ -41,7 +41,12 @@ except ImportError:
 
 from .indexer import MemoryEntry, MemoryIndex
 from .scanner import Session, discover_all, get_available_scanners
-from .extractor import SmartExtractor, FastExtractor, get_extraction_metrics
+from .extractor import (
+    SmartExtractor,
+    FastExtractor,
+    get_extraction_metrics,
+    extract_structured_decisions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +272,34 @@ class AntharmayaMemoryProvider(MemoryProvider):
                     },
                 },
             },
+            {
+                "name": "memory_bridge_decisions",
+                "description": (
+                    "List structured decisions consolidated from your past AI agent "
+                    "conversations — what you decided, which framework shaped it, and "
+                    "whether the outcome was later verified. Use this to recall and "
+                    "review prior architecture/product decisions."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "framework": {
+                            "type": "string",
+                            "description": "Optional framework filter (e.g. tradeoff_matrix, failure_modes)",
+                        },
+                        "unverified_only": {
+                            "type": "boolean",
+                            "description": "Only decisions whose outcome hasn't been verified yet",
+                            "default": False,
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum results (default: 20)",
+                            "default": 20,
+                        },
+                    },
+                },
+            },
         ]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
@@ -279,6 +312,8 @@ class AntharmayaMemoryProvider(MemoryProvider):
             return self._handle_quality()
         elif tool_name == "memory_bridge_scan":
             return self._handle_scan(args)
+        elif tool_name == "memory_bridge_decisions":
+            return self._handle_decisions(args)
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
@@ -327,12 +362,36 @@ class AntharmayaMemoryProvider(MemoryProvider):
             "available_scanners": scanners,
         })
 
+    def _handle_decisions(self, args: dict) -> str:
+        """List structured decisions consolidated from agent conversations."""
+        if not self._index:
+            return json.dumps({"error": "Index not initialized"})
+        framework = args.get("framework") or None
+        unverified_only = bool(args.get("unverified_only", False))
+        limit = int(args.get("limit", 20))
+        with self._prefetch_lock:
+            decisions = self._index.get_decisions(
+                limit=limit, framework=framework, unverified_only=unverified_only
+            )
+        return json.dumps({
+            "count": len(decisions),
+            "decisions": [
+                {
+                    "id": d.get("id"),
+                    "decision": d.get("decision_text"),
+                    "framework": d.get("framework_used"),
+                    "source": d.get("agent_source"),
+                    "confidence": d.get("confidence"),
+                    "outcome_verified": d.get("outcome_verified"),
+                }
+                for d in decisions
+            ],
+        })
+
     def _handle_quality(self) -> str:
         """Return extraction quality metrics."""
         try:
-            from src.extractor import get_extraction_metrics
-            metrics = get_extraction_metrics()
-            return json.dumps(metrics)
+            return json.dumps(get_extraction_metrics())
         except Exception as e:
             return json.dumps({"error": f"Failed to get quality metrics: {e}"})
 
@@ -365,6 +424,19 @@ class AntharmayaMemoryProvider(MemoryProvider):
             for entry in entries:
                 self._index.upsert(entry)
 
+            # Promote decisions into the structured_decisions table (Remember).
+            for d in extract_structured_decisions(session, entries):
+                try:
+                    self._index.upsert_decision(
+                        d["decision_text"],
+                        agent_source=d["agent_source"],
+                        framework_used=d["framework_used"],
+                        session_id=d["session_id"],
+                        confidence=d["confidence"],
+                    )
+                except Exception as e:
+                    logger.debug("[antharmaya-bridge] decision upsert skipped: %s", e)
+
             self._index.mark_source_processed(
                 session.source,
                 session.session_id,
@@ -386,6 +458,7 @@ class AntharmayaMemoryProvider(MemoryProvider):
             "new_sessions": new_count,
             "skipped": skipped_count,
             "total_entries": stats.get("total_entries", 0),
+            "total_decisions": stats.get("total_decisions", 0),
             "by_source": stats.get("by_source", {}),
             "quality_metrics": quality_metrics,
         })
@@ -396,7 +469,7 @@ class AntharmayaMemoryProvider(MemoryProvider):
         return [
             {
                 "key": "api_key",
-                "description": "OpenRouter or DeepSeek API key for LLM-powered consolidation",
+                "description": "OpenRouter API key for LLM-powered consolidation (optional — ctx.llm is primary)",
                 "secret": True,
                 "required": False,
                 "url": "https://openrouter.ai/keys",

@@ -33,6 +33,7 @@ from src.indexer import MemoryIndex, MemoryEntry, SCHEMA_VERSION, SCHEMA_MIGRATI
 from src.extractor import (
     FastExtractor, SmartExtractor, is_low_value_session,
     get_extraction_metrics, filter_sessions_for_llm, NOISE_PATTERNS,
+    extract_structured_decisions,
 )
 
 
@@ -238,6 +239,22 @@ class TestFTSTrigram:
         """Empty query should return empty results."""
         results = index.search_fts("")
         assert results == []
+
+    def test_typo_tolerant_fallback(self, index):
+        """A misspelled query should still surface the entry via trigram fuzzy fallback."""
+        index.upsert(MemoryEntry(
+            content="Decided to use Cloudflare R2 for object storage",
+            category="decision",
+            source_agent="claude-code",
+            source_session="test-fts-typo",
+            importance=0.8,
+        ))
+
+        # Exact spelling matches.
+        assert len(index.search_fts("cloudflare")) > 0
+        # Transposition/deletion typos still match via trigram OR fallback.
+        assert len(index.search_fts("clouflare")) > 0, "typo 'clouflare' should match 'Cloudflare'"
+        assert len(index.search_fts("cloudflre")) > 0, "typo 'cloudflre' should match 'Cloudflare'"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -780,6 +797,26 @@ class TestValidation:
         assert not _validate_table_name("entries; DROP TABLE")
         assert not _validate_table_name("")
 
+    def test_llm_output_sanitized(self, index):
+        """Malformed LLM facts must be coerced, never crash the scan."""
+        from src.extractor import _facts_to_entries
+
+        session = Session(source="codex", session_id="s-llm", messages=[])
+        facts = [
+            {"content": "Use Postgres 16 on port 5433", "category": "architecture", "importance": 1.7},
+            {"content": "Prefer explicit CORS origins", "category": "preference", "importance": "high"},
+            {"content": "short", "category": "fact"},          # too short -> dropped
+            "not-a-dict",                                       # junk -> skipped
+        ]
+        entries = _facts_to_entries(facts, session)
+
+        assert len(entries) == 2, "valid facts kept, junk/short dropped"
+        # Invalid category coerced to 'fact'; bad/over-range importance clamped.
+        for e in entries:
+            assert e.category in index.VALID_CATEGORIES
+            assert 0.0 <= e.importance <= 1.0
+            index.upsert(e)  # must not raise
+
     def test_get_recent_empty(self, index):
         """get_recent on empty index should return empty list."""
         assert index.get_recent(10) == []
@@ -944,3 +981,61 @@ class TestFormatMetadata:
 
 
 # Run via: python3 -m pytest tests/test_pipeline.py -v
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TEST: STRUCTURED DECISIONS (Decide → Remember → Verify)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestStructuredDecisions:
+    """The wired-in decision subsystem: schema v3, extraction, and verify loop."""
+
+    def test_schema_v3_tables_present_and_generic(self, index):
+        """v3 migration creates the decision tables; framework seeds carry no book refs."""
+        tables = {r[0] for r in index.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "structured_decisions" in tables
+        assert "frameworks" in tables
+
+        frameworks = index.list_frameworks()
+        names = {f["name"] for f in frameworks}
+        assert {"tradeoff_matrix", "failure_modes", "end_to_end"}.issubset(names)
+        # No book-specific provenance leaked into the seed data.
+        blob = " ".join(f"{f['name']} {f['discipline']} {f['description']}" for f in frameworks).lower()
+        assert "ddia" not in blob and "kleppmann" not in blob
+
+    def test_upsert_and_get_decision(self, index):
+        did = index.upsert_decision(
+            "Use Cloudflare R2 over S3 for object storage",
+            agent_source="claude-code",
+            framework_used="tradeoff_matrix",
+            session_id="s-dec",
+            confidence=0.8,
+        )
+        assert did >= 1
+        decisions = index.get_decisions()
+        assert len(decisions) == 1
+        assert decisions[0]["framework_used"] == "tradeoff_matrix"
+
+    def test_extract_structured_decisions_infers_framework(self):
+        """Decision-category entries get promoted with an inferred framework."""
+        session = Session(source="codex", session_id="s1", messages=[])
+        entries = [
+            MemoryEntry(content="We will use Postgres over MySQL — a clear trade-off matrix decision",
+                        category="decision", source_agent="codex", source_session="s1", importance=0.7),
+            MemoryEntry(content="Prefers tabs over spaces", category="preference",
+                        source_agent="codex", source_session="s1", importance=0.6),
+        ]
+        decisions = extract_structured_decisions(session, entries)
+        assert len(decisions) == 1, "only decision-category entries are promoted"
+        assert decisions[0]["framework_used"] == "tradeoff_matrix"
+
+    def test_verify_outcome_loop(self, index):
+        did = index.upsert_decision("Adopt event sourcing", agent_source="hermes")
+        assert index.mark_decision_outcome(did, 1, "Worked out well after 3 months")
+        verified = index.get_decisions()[0]
+        assert verified["outcome_verified"] == 1
+        # stats reflects the verified decision
+        s = index.stats()
+        assert s["total_decisions"] == 1 and s["verified_decisions"] == 1

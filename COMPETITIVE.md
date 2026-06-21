@@ -125,7 +125,7 @@ with a frictionless UX becomes the default. After that, the category calcifies.
 | 2 | **Deep Hermes integration** — MemoryProvider, not MCP | ❌ ClawMem/Engram are MCP-only |
 | 3 | **Curl one-liner** — installs in seconds | ❌ All competitors are multi-step |
 | 4 | **9+ agent scanners** — broadest coverage | ✅ Most do 2-3 agents |
-| 5 | **100% local, privacy-first** — no data leaves machine | ✅ Shared by ClawMem, not others |
+| 5 | **Local-by-default, privacy-first** — index never leaves machine; LLM pass uses your own Hermes model (local or cloud, your choice) | ✅ Shared by ClawMem, not others |
 | 6 | **FTS5 trigram search** — typo-tolerant, sub-ms | ✅ Shared by some |
 | 7 | **Antharmaya Labs branded** — trust signal | ❌ Only Sibyl has a company |
 | 8 | **Open source MIT** — no lock-in, community-owned | ✅ Shared by most |
@@ -141,7 +141,7 @@ with a frictionless UX becomes the default. After that, the category calcifies.
 | # | Con | Fix | Status |
 |---|-----|-----|--------|
 | 1 | Rules-based extraction shallow (59 from 482) | `ctx.llm` — free, deep extraction. Improved FastExtractor with 3x patterns | ✅ Closed |
-| 2 | No semantic search | FTS5 trigram (typo-tolerant, 80% of vector quality) | ✅ Closed |
+| 2 | No semantic search | FTS5 trigram delivers typo-tolerant lexical + substring search now; vector/semantic search scaffolded (embeddings table) and deferred to v0.2 | 🟡 Partial |
 | 3 | 7 agents, missing some | +Continue.dev, +Aider, +Cline, contribution template | ✅ Closed |
 | 4 | Manual scan only | Optional cron in install.sh, batch processing CLI | ✅ Closed |
 | 5 | Single provider limit | Documented tradeoff; v0.2 dual-mode | 📋 Planned |

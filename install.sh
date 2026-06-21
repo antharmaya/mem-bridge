@@ -10,7 +10,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/antharmaya/mem-bridge.git"
 REPO_DIR="${HOME}/.hermes/plugins/memory/antharmaya-bridge"
-VERSION="${VERSION:-v0.1.1}"
+VERSION="${VERSION:-v0.1.3}"
 
 BOLD="\033[1m"
 GREEN="\033[32m"
@@ -123,7 +123,7 @@ echo ""
 
 # ─── Initial scan ──────────────────────────────────────────────────────────
 
-HAS_API_KEY="${MEMORY_BRIDGE_API_KEY:-${DEEPSEEK_API_KEY:-${OPENROUTER_API_KEY:-}}}"
+HAS_API_KEY="${MEMORY_BRIDGE_API_KEY:-${OPENROUTER_API_KEY:-}}"
 if [ -n "$HAS_API_KEY" ]; then
     USE_LLM_FLAG=""
     echo -e "  ${GREEN}✓${RESET} API key detected — LLM-powered extraction enabled"
@@ -216,6 +216,6 @@ echo "      --name \"memory-bridge-daily-scan\" \\"
 echo "      --prompt \"Run memory_bridge_scan use_llm=true to import new agent conversations\""
 echo ""
 echo ""
-echo -e "  ${CYAN}antharmaya.com/memory-bridge${RESET}  |  ${CYAN}github.com/antharmaya-labs/hermes-memory-bridge${RESET}"
+echo -e "  ${CYAN}antharmaya.com/memory-bridge${RESET}  |  ${CYAN}github.com/antharmaya/mem-bridge${RESET}"
 echo ""
 echo "  This is open-source software. Contributions welcome!"

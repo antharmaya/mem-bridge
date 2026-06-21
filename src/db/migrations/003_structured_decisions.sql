@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS structured_decisions (
     decision_text TEXT NOT NULL,               -- WHAT we decided
     -- Rationale (the WHY — currently MISSING)
     rationale TEXT,                            -- why this choice over alternatives
-    framework_used TEXT,                       -- which DDIA/AgentOps pattern applied
+    framework_used TEXT,                       -- which decision framework applied
     alternatives_considered TEXT,              -- JSON array of rejected options
     constraints TEXT,                          -- what shaped the decision (budget, time, etc.)
     -- Provenance
@@ -45,21 +45,21 @@ CREATE INDEX IF NOT EXISTS idx_decisions_log_id ON structured_decisions(decision
 CREATE TABLE IF NOT EXISTS frameworks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
-    source_book TEXT,
+    discipline TEXT,
     description TEXT
 );
 
--- Seed DDIA frameworks
-INSERT OR IGNORE INTO frameworks (name, source_book, description)
-VALUES ('tradeoff_matrix', 'DDIA Ch.1', 'Systematic trade-off analysis: cloud vs self-host, consistency vs availability');
-INSERT OR IGNORE INTO frameworks (name, source_book, description)
-VALUES ('failure_modes', 'DDIA Ch.9', 'Failure mode analysis: network, clock, Byzantine faults');
-INSERT OR IGNORE INTO frameworks (name, source_book, description)
-VALUES ('end_to_end', 'DDIA Ch.13', 'End-to-end argument: trust-but-verify principle for distributed systems');
-INSERT OR IGNORE INTO frameworks (name, source_book, description)
-VALUES ('ethics_triage', 'DDIA Ch.14', 'Data minimization, consent, privacy impact triage');
-INSERT OR IGNORE INTO frameworks (name, source_book, description)
-VALUES ('agentops_trajectory', 'Google Agent Guide', 'Agent reasoning trajectory evaluation and confidence calibration');
+-- Seed decision frameworks (generic engineering/AgentOps disciplines)
+INSERT OR IGNORE INTO frameworks (name, discipline, description)
+VALUES ('tradeoff_matrix', 'Systems trade-off analysis', 'Systematic trade-off analysis: cloud vs self-host, consistency vs availability');
+INSERT OR IGNORE INTO frameworks (name, discipline, description)
+VALUES ('failure_modes', 'Distributed failure analysis', 'Failure mode analysis: network, clock, and Byzantine faults');
+INSERT OR IGNORE INTO frameworks (name, discipline, description)
+VALUES ('end_to_end', 'End-to-end integrity', 'End-to-end verification: trust-but-verify principle for distributed systems');
+INSERT OR IGNORE INTO frameworks (name, discipline, description)
+VALUES ('ethics_triage', 'Privacy & ethics review', 'Data minimization, consent, and privacy impact triage');
+INSERT OR IGNORE INTO frameworks (name, discipline, description)
+VALUES ('agentops_trajectory', 'Agent trajectory evaluation', 'Agent reasoning trajectory evaluation and confidence calibration');
 
 -- Backfill existing decision entries from entries table
 INSERT OR IGNORE INTO structured_decisions (
