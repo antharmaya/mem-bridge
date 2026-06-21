@@ -281,6 +281,7 @@ class PluginLlmEngine:
                 ],
                 temperature=0.1,
                 max_tokens=2000,
+                timeout=60,
             )
             facts_data = _parse_response(result.text if hasattr(result, 'text') else str(result))
         except Exception as e:
@@ -533,21 +534,15 @@ class SmartExtractor:
         return merged
 
     def _get_best_engine(self):
-        if self._best_engine is not None:
-            return self._best_engine
-
-        # Try ctx.llm first (Hermes host model — zero config)
+        # Re-check availability each time (engine may go online/offline)
         if self._plugin_llm and self._plugin_llm.available:
-            self._best_engine = self._plugin_llm
-            return self._best_engine
+            return self._plugin_llm
 
         # Fall back to direct API
         if self._direct.available:
-            self._best_engine = self._direct
-            return self._best_engine
+            return self._direct
 
-        self._best_engine = False  # None available, use FastExtractor only
-        return None
+        return None  # None available, use FastExtractor only
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────

@@ -23,7 +23,7 @@ try:
     from agent.memory_provider import MemoryProvider
 except ImportError:
     class MemoryProvider:
-        """Stub ABC for standalone/testing usage."""
+        """Full-stub for standalone/testing — mirrors the Hermes MemoryProvider ABC."""
         def is_available(self) -> bool: return True
         def initialize(self, session_id: str, **kwargs) -> None: pass
         def system_prompt_block(self) -> str: return ""
@@ -32,6 +32,11 @@ except ImportError:
         def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "", messages=None) -> None: pass
         def get_tool_schemas(self) -> List[Dict[str, Any]]: return []
         def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str: return "{}"
+        def on_session_switch(self, new_session_id: str, *, parent_session_id: str = "", reset: bool = False, rewound: bool = False, **kwargs) -> None: pass
+        def on_session_end(self, messages: List[Dict[str, Any]]) -> None: pass
+        def on_memory_write(self, action: str, target: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None: pass
+        def get_config_schema(self) -> List[Dict[str, Any]]: return []
+        def save_config(self, values: Dict[str, Any], hermes_home: str) -> None: pass
         def shutdown(self) -> None: pass
 
 from .indexer import MemoryEntry, MemoryIndex

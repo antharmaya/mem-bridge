@@ -3,6 +3,7 @@ Agent Linux Control scanner — event logs.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -44,9 +45,14 @@ def scan_agent_linux_control(home: Path) -> Iterator[Session]:
         return
 
     if messages:
+        # Content-hash-based session_id: changes when file content changes
+        file_stat = events_file.stat()
+        session_id = hashlib.sha256(
+            f"{events_file}:{file_stat.st_mtime}:{file_stat.st_size}".encode()
+        ).hexdigest()[:16]
         yield Session(
             source="agent-linux-control",
-            session_id="agent-linux-events",
+            session_id=session_id,
             messages=messages,
             metadata={"file_path": str(events_file)},
         )
