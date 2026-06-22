@@ -1,6 +1,6 @@
 [project]
 name = "antharmaya-memory-bridge"
-version = "0.1.1"
+version = "0.4.1"
 description = "Unified agent memory for Hermes — photographic memory of every AI conversation"
 readme = "README.md"
 license = { text = "MIT" }
@@ -15,10 +15,14 @@ dev = [
     "pytest>=8.0,<9",
     "pytest-cov>=6.0,<7",
 ]
+semantic = [
+    "model2vec>=0.3,<1",
+    "numpy>=1.24",
+]
 
 [project.urls]
 Homepage = "https://antharmaya.com/memory-bridge"
-Repository = "https://github.com/antharmaya-labs/hermes-memory-bridge"
+Repository = "https://github.com/antharmaya/mem-bridge"
 
 [project.scripts]
 memory-bridge = "src.cli:main"

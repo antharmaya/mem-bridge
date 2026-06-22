@@ -117,6 +117,13 @@ def cmd_scan(args):
             new += 1
             total_entries += len(entries)
 
+    # Optional semantic backfill (no-op if model2vec isn't installed).
+    from src import embeddings as _emb
+    if _emb.available():
+        n = index.backfill_embeddings(_emb.embed)
+        if n:
+            print(f"Embedded {n} new entries for semantic search.")
+
     stats = index.stats()
     print()
     print(f"Done. {new} new sessions processed, {skipped} skipped.")
@@ -447,6 +454,27 @@ def cmd_brain(args):
     index.close()
 
 
+def cmd_embed(args):
+    """Backfill semantic embeddings for entries that lack them (optional feature)."""
+    from src.indexer import MemoryIndex
+    from src.config import get_default_db_path
+    from src import embeddings as _emb
+
+    if not _emb.available():
+        print("Semantic embeddings are not installed. Enable with:")
+        print('  pip install "memory-bridge[semantic]"   (or: pip install model2vec)')
+        return
+    db_path = get_default_db_path()
+    if not db_path.exists():
+        print("No memory index found. Run 'memory-bridge scan' first.")
+        return
+    index = MemoryIndex(db_path)
+    print(f"Embedding model: {_emb.MODEL_NAME}")
+    n = index.backfill_embeddings(_emb.embed)
+    print(f"✅ Embedded {n} entries. Total vectors: {index.embedding_count()}")
+    index.close()
+
+
 def cmd_mcp(args):
     """Run the MCP server (stdio) so any MCP client can use the unified index."""
     from src.mcp_server import serve
@@ -486,6 +514,10 @@ def main():
     quality.set_defaults(func=cmd_quality)
 
     # decisions
+    # embed (optional semantic)
+    embed = sub.add_parser("embed", help="Backfill semantic embeddings (needs memory-bridge[semantic])")
+    embed.set_defaults(func=cmd_embed)
+
     # brain
     brain = sub.add_parser("brain", help="Explore the entity graph (top entities, or an entity's map)")
     brain.add_argument("entity", nargs="*", help="Entity to map (omit for top entities)")

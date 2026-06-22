@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.4.1 (2026-06-22) — Optional local semantic + hybrid RRF retrieval
+
+Real semantic recall without betraying local-first — the model2vec/sqlite-vec
+finding from the v0.4 research brief, applied.
+
+- **Optional embeddings** (`embeddings.py`): model2vec static vectors — numpy-only,
+  ~30 MB, CPU, no torch/GPU/cloud. Strictly optional: absent → retrieval falls back
+  to FTS + graph. Enable with `pip install "memory-bridge[semantic]"`.
+- **Wired the dead vector path**: `search_semantic` had an off-by-one column bug
+  (read `metadata` as the vector) — fixed. Added `store_embedding`,
+  `embedding_count`, and `backfill_embeddings(embed_fn)` (batched, idempotent,
+  decoupled from the scan hot-path, injectable for tests).
+- **Hybrid RRF fusion** (`search_rrf`): Reciprocal Rank Fusion of FTS + graph +
+  (optional) semantic, with a light importance nudge. Now powers `prefetch()`.
+- **`memory-bridge embed`** CLI backfill; scan auto-backfills when the backend is present.
+- `pyproject`: `[semantic]` extra; fixed stale version + repo URL.
+- Tests: 96 → 100 (semantic search, backfill idempotency, RRF degradation — all
+  without requiring model2vec installed).
+
 ## v0.4.0 (2026-06-22) — The Brain: a local cross-agent context graph
 
 Foundation of the memory brain — a knowledge graph over your memories, built

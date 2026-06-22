@@ -699,15 +699,87 @@ class MemoryIndex:
 
         results = []
         for row in rows:
-            stored_vec = _decode_vector(row[10])
+            stored_vec = _decode_vector(row[11])  # vector is column 11 (metadata is 10)
             if stored_vec and len(stored_vec) == len(query_embedding):
                 similarity = _cosine_similarity(query_embedding, stored_vec)
-                entry = self._row_to_entry(row[:10])
+                entry = self._row_to_entry(row[:11])
                 entry.metadata["_similarity"] = similarity
                 results.append((similarity, entry))
 
         results.sort(key=lambda x: x[0], reverse=True)
         return [entry for _, entry in results[:limit]]
+
+    def store_embedding(self, entry_id: int, vector: list[float], model: str = "") -> None:
+        """Persist an entry's embedding vector for semantic search."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO embeddings (entry_id, vector, model, dimensions) "
+            "VALUES (?, ?, ?, ?)",
+            (entry_id, encode_vector(vector), model, len(vector)),
+        )
+        self.conn.commit()
+
+    def embedding_count(self) -> int:
+        try:
+            return self.conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        except sqlite3.OperationalError:
+            return 0
+
+    def backfill_embeddings(self, embed_fn, batch: int = 256, limit: int | None = None) -> int:
+        """Embed entries that lack a vector, using ``embed_fn(list[str]) -> list[vec]``.
+
+        Decoupled from the scan hot-path and injectable for tests. Returns the
+        number of embeddings written.
+        """
+        rows = self.conn.execute("""
+            SELECT e.id, e.content FROM entries e
+            LEFT JOIN embeddings emb ON emb.entry_id = e.id
+            WHERE emb.entry_id IS NULL
+            ORDER BY e.importance DESC
+        """).fetchall()
+        if limit:
+            rows = rows[:limit]
+        written = 0
+        for i in range(0, len(rows), batch):
+            chunk = rows[i:i + batch]
+            vecs = embed_fn([c[1] for c in chunk])
+            if not vecs:
+                break  # backend disabled / failed
+            for (eid, _content), vec in zip(chunk, vecs):
+                self.store_embedding(eid, vec)
+                written += 1
+        return written
+
+    def search_rrf(
+        self,
+        query: str,
+        query_embedding: list[float] | None = None,
+        limit: int = 10,
+        k: int = 60,
+    ) -> list[MemoryEntry]:
+        """Hybrid retrieval: fuse FTS + graph + (optional) semantic via Reciprocal
+        Rank Fusion, then nudge by importance. Works with whatever legs are
+        available — semantic simply drops out when no embedding is supplied.
+        """
+        legs = [
+            self.search_fts(query, limit=limit * 3) if query else [],
+            self.graph_recall(query, limit=limit * 3) if query else [],
+            self.search_semantic(query_embedding, limit=limit * 3) if query_embedding else [],
+        ]
+        scores: dict[int, float] = {}
+        by_id: dict[int, MemoryEntry] = {}
+        for leg in legs:
+            for rank, e in enumerate(leg):
+                if e.id is None:
+                    continue
+                scores[e.id] = scores.get(e.id, 0.0) + 1.0 / (k + rank + 1)
+                by_id[e.id] = e
+        # Light importance nudge so high-value memories break ties upward.
+        ranked = sorted(
+            scores.items(),
+            key=lambda kv: (kv[1] + 0.01 * by_id[kv[0]].importance),
+            reverse=True,
+        )
+        return [by_id[i] for i, _ in ranked[:limit]]
 
     def search_hybrid(self, query: str, query_embedding: list[float] | None = None, limit: int = 20) -> list[MemoryEntry]:
         """Combined FTS + semantic search. Falls back gracefully."""
