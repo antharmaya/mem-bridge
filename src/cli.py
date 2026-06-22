@@ -9,6 +9,7 @@ Usage:
   memory-bridge quality           Show extraction quality metrics
   memory-bridge decisions         List structured decisions consolidated from agents
   memory-bridge recall <question> Recall what you did with an agent in a time window
+  memory-bridge mcp               Run the MCP server (stdio) for any MCP client
   memory-bridge consolidate       Deep LLM consolidation of all unscanned sessions
   memory-bridge repair            Repair corrupted index
   memory-bridge export <file>     Export index to tar.gz
@@ -412,11 +413,21 @@ def cmd_vacuum(args):
     print(f"✅ Vacuum complete. {before / 1024:.1f} KB → {after / 1024:.1f} KB (saved {saved / 1024:.1f} KB)")
 
 
+def cmd_mcp(args):
+    """Run the MCP server (stdio) so any MCP client can use the unified index."""
+    from src.mcp_server import serve
+    serve()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Antharmaya Memory Bridge — Unified Agent Memory",
     )
     sub = parser.add_subparsers(dest="command")
+
+    # mcp (framework-agnostic frontend)
+    mcp = sub.add_parser("mcp", help="Run the MCP server (stdio) for any MCP client")
+    mcp.set_defaults(func=cmd_mcp)
 
     # scan
     scan = sub.add_parser("scan", help="Scan for new agent conversations")
