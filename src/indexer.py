@@ -575,6 +575,86 @@ class MemoryIndex:
         """, (category, limit)).fetchall()
         return [self._row_to_entry(r) for r in rows]
 
+    def recall(
+        self,
+        agent: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        query: str | None = None,
+        limit: int = 30,
+    ) -> list[MemoryEntry]:
+        """Scoped recall: 'what did I do with <agent> between <since> and <until>'.
+
+        Filters by source agent (substring, case-insensitive) and an ISO
+        created_at date range, optionally narrowed by a full-text query. This
+        is the retrieval shape vague/temporal questions actually need — the one
+        plain FTS could not serve. All inputs are bound parameters.
+        """
+        clauses, params = [], []
+        if agent:
+            clauses.append("LOWER(source_agent) LIKE ?")
+            params.append(f"%{agent.lower()}%")
+        if since:
+            clauses.append("created_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("created_at <= ?")
+            params.append(until)
+
+        if query and query.strip():
+            ids = [e.id for e in self.search_fts(query, limit=limit * 3) if e.id is not None]
+            if not ids:
+                return []
+            clauses.append(f"id IN ({','.join('?' for _ in ids)})")
+            params.extend(ids)
+
+        where = " AND ".join(clauses) if clauses else "1=1"
+        params.append(limit)
+        rows = self.conn.execute(f"""
+            SELECT id, content, category, source_agent, source_session,
+                   importance, created_at, last_referenced, reference_count, tags, metadata
+            FROM entries
+            WHERE {where}
+            ORDER BY created_at DESC, importance DESC
+            LIMIT ?
+        """, params).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+
+    def recall_decisions(
+        self,
+        agent: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Structured decisions scoped by agent + date range (Council ⨉ Bridge).
+
+        Lets 'what did I decide with <agent> on <date>' return the actual
+        decisions and the framework that shaped each — not just loose facts.
+        """
+        clauses, params = ["archived = 0"], []
+        if agent:
+            clauses.append("LOWER(agent_source) LIKE ?")
+            params.append(f"%{agent.lower()}%")
+        if since:
+            clauses.append("extracted_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("extracted_at <= ?")
+            params.append(until)
+        where = " AND ".join(clauses)
+        params.append(limit)
+        try:
+            cur = self.conn.execute(
+                f"SELECT * FROM structured_decisions WHERE {where} "
+                f"ORDER BY extracted_at DESC LIMIT ?",
+                params,
+            )
+        except sqlite3.OperationalError:
+            return []  # pre-v3 index
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
     # ─── Integrity & repair ──────────────────────────────────────────────
 
     def integrity_check(self) -> list[str]:

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.2.0 (2026-06-22) — Scoped recall that actually fires
+
+Driven by a live failure: asked "what did I do with Claude Code on May 15-16?",
+Hermes never used the bridge — plain full-text search can't serve a temporal /
+per-agent question. v0.2 adds the retrieval shape those questions need.
+
+### Recall (new)
+
+- **Conversation-dated memories**: entries are stamped with the *session's* real
+  timestamp (latest message / started_at), not scan time — so date filters mean something
+- **`MemoryIndex.recall(agent, since, until, query)`**: scoped retrieval by source
+  agent (substring) + ISO date window + optional full-text narrowing
+- **`recall_decisions(...)`**: structured decisions scoped the same way (Council x Bridge)
+- **Deterministic query understanding** (`recall_query.py`, no LLM, stdlib): parses
+  "what did I do with claude code last month 15th to 16th" -> agent + date window
+- **Smarter `prefetch()`**: temporal/agent turns route to scoped recall and inject the
+  answer silently (with dates + decisions), so the agent never falls back to shell archaeology
+- **`memory_bridge_recall` tool** + **`memory-bridge recall <question>`** CLI command
+
+### Notes
+
+- Real vector/semantic search remains deferred — it needs a heavy embedding
+  dependency that would break the local / zero-config / minimal-deps identity.
+  Recall is deterministic and dependency-free.
+- Tests: 81 -> 84.
+
 ## v0.1.1 (2026-06-21) — The Definitive Audit
 
 ### Content Quality — 7→10 (Biggest Gap)

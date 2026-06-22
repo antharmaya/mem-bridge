@@ -47,6 +47,7 @@ from .extractor import (
     get_extraction_metrics,
     extract_structured_decisions,
 )
+from .recall_query import parse_recall_query
 
 logger = logging.getLogger(__name__)
 
@@ -119,23 +120,49 @@ class AntharmayaMemoryProvider(MemoryProvider):
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """Inject relevant memories for the current turn."""
+        """Inject relevant memories for the current turn.
+
+        Temporal / "what did I do with <agent>" turns are routed to scoped
+        recall (agent + date window) so the answer is injected silently and the
+        agent never has to fall back to a tool call or shell archaeology.
+        Everything else uses full-text search.
+        """
         if not self._index or not query.strip():
             return ""
 
+        parsed = parse_recall_query(query)
+        scoped = parsed["is_recall"] and (parsed["agent"] or parsed["since"])
+
         with self._prefetch_lock:
             self._last_prefetch_query = query
-            results = self._index.search_fts(query, limit=5)
+            if scoped:
+                results = self._index.recall(
+                    agent=parsed["agent"], since=parsed["since"],
+                    until=parsed["until"], query=None, limit=8,
+                )
+                decisions = self._index.recall_decisions(
+                    agent=parsed["agent"], since=parsed["since"],
+                    until=parsed["until"], limit=4,
+                )
+            else:
+                results = self._index.search_fts(query, limit=5)
+                decisions = []
 
-        if not results:
+        if not results and not decisions:
             return ""
 
         lines = ["\n## Relevant Memories (from your other AI agents)", ""]
         for entry in results:
             source_tag = entry.source_agent.replace("-", " ").title()
-            lines.append(
-                f"- [{entry.category.upper()}] ({source_tag}) {entry.content}"
-            )
+            when = (entry.created_at or "")[:10]
+            stamp = f" · {when}" if when else ""
+            lines.append(f"- [{entry.category.upper()}] ({source_tag}{stamp}) {entry.content}")
+        if decisions:
+            lines.append("")
+            lines.append("**Decisions made in this window:**")
+            for d in decisions:
+                fw = d.get("framework_used") or "unknown"
+                lines.append(f"- ({fw}) {d.get('decision_text', '')}")
 
         return "\n".join(lines) + "\n"
 
@@ -273,6 +300,26 @@ class AntharmayaMemoryProvider(MemoryProvider):
                 },
             },
             {
+                "name": "memory_bridge_recall",
+                "description": (
+                    "Recall what happened with a specific agent in a time window — "
+                    "answers questions like 'what did I do with Claude Code last "
+                    "month' or 'what did Codex and I decide on the 15th'. Pass a "
+                    "natural-language question; the agent and date range are parsed "
+                    "automatically. Use this for any time- or agent-scoped recall."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "Natural-language recall question (agent + timeframe are parsed out)",
+                        },
+                    },
+                    "required": ["question"],
+                },
+            },
+            {
                 "name": "memory_bridge_decisions",
                 "description": (
                     "List structured decisions consolidated from your past AI agent "
@@ -312,6 +359,8 @@ class AntharmayaMemoryProvider(MemoryProvider):
             return self._handle_quality()
         elif tool_name == "memory_bridge_scan":
             return self._handle_scan(args)
+        elif tool_name == "memory_bridge_recall":
+            return self._handle_recall(args)
         elif tool_name == "memory_bridge_decisions":
             return self._handle_decisions(args)
         else:
@@ -360,6 +409,35 @@ class AntharmayaMemoryProvider(MemoryProvider):
         return json.dumps({
             **stats,
             "available_scanners": scanners,
+        })
+
+    def _handle_recall(self, args: dict) -> str:
+        """Scoped recall: parse the question for agent + timeframe, then recall."""
+        if not self._index:
+            return json.dumps({"error": "Index not initialized"})
+        question = args.get("question", "") or args.get("query", "")
+        parsed = parse_recall_query(question)
+        with self._prefetch_lock:
+            entries = self._index.recall(
+                agent=parsed["agent"], since=parsed["since"], until=parsed["until"],
+                query=None if (parsed["agent"] or parsed["since"]) else question, limit=20,
+            )
+            decisions = self._index.recall_decisions(
+                agent=parsed["agent"], since=parsed["since"], until=parsed["until"], limit=10,
+            )
+        return json.dumps({
+            "parsed": {"agent": parsed["agent"], "since": parsed["since"], "until": parsed["until"]},
+            "count": len(entries),
+            "memories": [
+                {"content": e.content, "category": e.category, "source": e.source_agent,
+                 "date": (e.created_at or "")[:10]}
+                for e in entries
+            ],
+            "decisions": [
+                {"decision": d.get("decision_text"), "framework": d.get("framework_used"),
+                 "outcome_verified": d.get("outcome_verified")}
+                for d in decisions
+            ],
         })
 
     def _handle_decisions(self, args: dict) -> str:

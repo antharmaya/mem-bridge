@@ -8,6 +8,7 @@ Usage:
   memory-bridge stats             Show memory bridge statistics
   memory-bridge quality           Show extraction quality metrics
   memory-bridge decisions         List structured decisions consolidated from agents
+  memory-bridge recall <question> Recall what you did with an agent in a time window
   memory-bridge consolidate       Deep LLM consolidation of all unscanned sessions
   memory-bridge repair            Repair corrupted index
   memory-bridge export <file>     Export index to tar.gz
@@ -246,6 +247,47 @@ def cmd_decisions(args):
     index.close()
 
 
+def cmd_recall(args):
+    """Scoped recall: 'what did I do with <agent> on <date>'."""
+    from src.indexer import MemoryIndex
+    from src.recall_query import parse_recall_query
+    from src.config import get_default_db_path
+
+    db_path = get_default_db_path()
+    if not db_path.exists():
+        print("No memory index found. Run 'memory-bridge scan' first.")
+        return
+
+    question = " ".join(args.question)
+    parsed = parse_recall_query(question)
+    index = MemoryIndex(db_path)
+    entries = index.recall(
+        agent=parsed["agent"], since=parsed["since"], until=parsed["until"],
+        query=None if (parsed["agent"] or parsed["since"]) else question, limit=args.limit,
+    )
+    decisions = index.recall_decisions(
+        agent=parsed["agent"], since=parsed["since"], until=parsed["until"], limit=10,
+    )
+
+    scope = []
+    if parsed["agent"]:
+        scope.append(f"agent={parsed['agent']}")
+    if parsed["since"]:
+        scope.append(f"{parsed['since'][:10]} → {(parsed['until'] or '')[:10]}")
+    print(f"Recall ({', '.join(scope) or 'full text'}): {len(entries)} memories, {len(decisions)} decisions")
+    print()
+    for e in entries:
+        when = (e.created_at or "")[:10]
+        src = e.source_agent.replace("-", " ").title()
+        print(f"  [{e.category.upper()}] ({src} · {when}) {e.content[:160]}")
+    if decisions:
+        print()
+        print("  Decisions in this window:")
+        for d in decisions:
+            print(f"    ({d.get('framework_used') or 'unknown'}) {d.get('decision_text', '')[:140]}")
+    index.close()
+
+
 def cmd_quality(args):
     """Show extraction quality metrics."""
     from src.extractor import get_extraction_metrics
@@ -399,6 +441,12 @@ def main():
     quality.set_defaults(func=cmd_quality)
 
     # decisions
+    # recall
+    recall = sub.add_parser("recall", help="Recall what happened with an agent in a time window")
+    recall.add_argument("question", nargs="+", help="e.g. recall what did I do with claude code last month 15th to 16th")
+    recall.add_argument("--limit", type=int, default=30, help="Max results (default 30)")
+    recall.set_defaults(func=cmd_recall)
+
     decisions = sub.add_parser("decisions", help="List structured decisions")
     decisions.add_argument("--framework", type=str, default=None, help="Filter by framework name")
     decisions.add_argument("--unverified", action="store_true", help="Only outcome-unverified decisions")
