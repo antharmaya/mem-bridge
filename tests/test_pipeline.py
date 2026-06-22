@@ -1175,3 +1175,53 @@ class TestMcpServer:
         from src.mcp_server import handle_message
         r = handle_message({"jsonrpc": "2.0", "id": 9, "method": "bogus/method"})
         assert r["error"]["code"] == -32601
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TEST: THE BRAIN — entity graph (v0.4)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestBrainGraph:
+    """Entity extraction + graph build + associative recall."""
+
+    def test_entity_extraction(self):
+        from src.entities import extract_entities, clean_project_name
+        ents = dict((d.lower(), k) for d, k in extract_entities(
+            "We will deploy PhotoSelect on Cloudflare with Postgres and Redis",
+            project="-home-driftr-Desktop-bolting-photoselect"))
+        assert ents.get("cloudflare") == "tech"
+        assert ents.get("postgres") == "tech"
+        assert ents.get("photoselect") == "product"
+        # encoded project path is cleaned to a readable name
+        assert clean_project_name("-home-driftr-Desktop-bolting-photoselect").endswith("photoselect")
+
+    def test_graph_build_and_associative_recall(self, index):
+        from src.entities import extract_entities
+        rows = [
+            ("Decided to use Cloudflare R2 for PhotoSelect storage", "decision"),
+            ("PhotoSelect backend runs Postgres on port 5433", "fact"),
+            ("Unrelated note about a goose recipe", "fact"),
+        ]
+        for content, cat in rows:
+            eid = index.upsert(MemoryEntry(content=content, category=cat,
+                                           source_agent="claude-code", source_session="s",
+                                           importance=0.6))
+            index.index_entities_for_entry(eid, extract_entities(content), "")
+        # PhotoSelect should be connected to cloudflare + postgres
+        nb = index.entity_neighborhood("photoselect")
+        neigh = {n["name"].lower() for n in nb["neighbors"]}
+        assert "cloudflare" in neigh and "postgres" in neigh
+        # associative recall pulls the two PhotoSelect memories, not the goose note
+        hits = index.graph_recall("photoselect storage", limit=5)
+        assert any("PhotoSelect" in h.content for h in hits)
+        assert not any("goose recipe" in h.content for h in hits)
+
+    def test_top_entities(self, index):
+        from src.entities import extract_entities
+        for _ in range(3):
+            eid = index.upsert(MemoryEntry(content="docker and docker compose", category="fact",
+                                           source_agent="x", source_session="s",
+                                           importance=0.5, created_at="2026-06-01T00:00:00+00:00"))
+            index.index_entities_for_entry(eid, extract_entities("docker and docker compose"), "")
+        top = {e["name"] for e in index.top_entities(kind="tech")}
+        assert "docker" in top
