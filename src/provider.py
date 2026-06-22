@@ -343,6 +343,23 @@ class AntharmayaMemoryProvider(MemoryProvider):
                 },
             },
             {
+                "name": "memory_bridge_brief",
+                "description": (
+                    "Get an always-fresh briefing on a project or entity — entry counts, "
+                    "active dates, the decisions made (with outcomes, and failed ones "
+                    "flagged), connected tools/files, and key memories. Computed live from "
+                    "the fact store (never a stale summary). Use before starting work on "
+                    "something to load its full context at once."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "scope": {"type": "string", "description": "Project or entity name (e.g. 'photoselect')"},
+                    },
+                    "required": ["scope"],
+                },
+            },
+            {
                 "name": "memory_bridge_decisions",
                 "description": (
                     "List structured decisions consolidated from your past AI agent "
@@ -386,6 +403,8 @@ class AntharmayaMemoryProvider(MemoryProvider):
             return self._handle_recall(args)
         elif tool_name == "memory_bridge_brain":
             return self._handle_brain(args)
+        elif tool_name == "memory_bridge_brief":
+            return self._handle_brief(args)
         elif tool_name == "memory_bridge_decisions":
             return self._handle_decisions(args)
         else:
@@ -435,6 +454,16 @@ class AntharmayaMemoryProvider(MemoryProvider):
             **stats,
             "available_scanners": scanners,
         })
+
+    def _handle_brief(self, args: dict) -> str:
+        """Always-fresh deterministic briefing for a project/entity."""
+        if not self._index:
+            return json.dumps({"error": "Index not initialized"})
+        scope = args.get("scope") or args.get("project") or args.get("entity") or ""
+        if not scope:
+            return json.dumps({"error": "provide a 'scope' (project or entity name)"})
+        with self._prefetch_lock:
+            return json.dumps(self._index.brief(scope))
 
     def _handle_brain(self, args: dict) -> str:
         """Explore the entity graph: associative recall and/or entity neighborhood."""
@@ -579,6 +608,13 @@ class AntharmayaMemoryProvider(MemoryProvider):
                 self._index.backfill_embeddings(embeddings.embed)
             except Exception as e:
                 logger.debug("[antharmaya-bridge] embedding backfill skipped: %s", e)
+
+        # Reflection-as-detection: surface failed decisions as new lesson entries
+        # (deterministic, non-destructive — never mutates existing memories).
+        try:
+            self._index.detect_insights()
+        except Exception as e:
+            logger.debug("[antharmaya-bridge] insight detection skipped: %s", e)
 
         stats = self._index.stats()
 

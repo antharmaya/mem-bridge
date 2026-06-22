@@ -10,6 +10,8 @@ Usage:
   memory-bridge decisions         List structured decisions consolidated from agents
   memory-bridge recall <question> Recall what you did with an agent in a time window
   memory-bridge brain [entity]    Explore the entity graph (top entities or a map)
+  memory-bridge brief <scope>     Always-fresh briefing for a project/entity
+  memory-bridge reflect           Surface failed decisions as lessons (non-destructive)
   memory-bridge mcp               Run the MCP server (stdio) for any MCP client
   memory-bridge consolidate       Deep LLM consolidation of all unscanned sessions
   memory-bridge repair            Repair corrupted index
@@ -454,6 +456,35 @@ def cmd_brain(args):
     index.close()
 
 
+def cmd_brief(args):
+    """Always-fresh briefing for a project/entity (deterministic, traceable)."""
+    from src.indexer import MemoryIndex, format_brief
+    from src.config import get_default_db_path
+
+    db_path = get_default_db_path()
+    if not db_path.exists():
+        print("No memory index found. Run 'memory-bridge scan' first.")
+        return
+    index = MemoryIndex(db_path)
+    print(format_brief(index.brief(" ".join(args.scope))))
+    index.close()
+
+
+def cmd_reflect(args):
+    """Surface failed/contradicted decisions as new lesson entries (non-destructive)."""
+    from src.indexer import MemoryIndex
+    from src.config import get_default_db_path
+
+    db_path = get_default_db_path()
+    if not db_path.exists():
+        print("No memory index found. Run 'memory-bridge scan' first.")
+        return
+    index = MemoryIndex(db_path)
+    n = index.detect_insights()
+    print(f"🪞 Reflection: surfaced {n} insight(s) from failed decisions as new lessons.")
+    index.close()
+
+
 def cmd_embed(args):
     """Backfill semantic embeddings for entries that lack them (optional feature)."""
     from src.indexer import MemoryIndex
@@ -522,6 +553,15 @@ def main():
     brain = sub.add_parser("brain", help="Explore the entity graph (top entities, or an entity's map)")
     brain.add_argument("entity", nargs="*", help="Entity to map (omit for top entities)")
     brain.set_defaults(func=cmd_brain)
+
+    # brief
+    brief = sub.add_parser("brief", help="Always-fresh briefing for a project/entity")
+    brief.add_argument("scope", nargs="+", help="Project or entity name (e.g. photoselect)")
+    brief.set_defaults(func=cmd_brief)
+
+    # reflect
+    reflect = sub.add_parser("reflect", help="Surface failed decisions as lessons (non-destructive)")
+    reflect.set_defaults(func=cmd_reflect)
 
     # recall
     recall = sub.add_parser("recall", help="Recall what happened with an agent in a time window")
