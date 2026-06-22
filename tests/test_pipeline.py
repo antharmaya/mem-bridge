@@ -1085,3 +1085,46 @@ class TestRecall:
         assert len(index.recall(agent="claude-code")) == 2
         # Date alone, no agent, spans agents.
         assert len(index.recall(since="2026-05-14", until="2026-05-16")) == 2
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TEST: COVERAGE + TRACEABILITY (v0.2.1 — every entry searchable & traceable)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestCoverageAndTrace:
+    """No session is invisible; every entry traces back to its origin."""
+
+    def test_document_source_is_ingested(self):
+        # A memory-file style session (no user/assistant turns) must still yield entries.
+        s = Session(source="claude-code-memory", session_id="m1",
+                    project="/proj", metadata={"file_path": "/home/u/.claude/MEMORY.md"},
+                    messages=[Message(role="memory", content=(
+                        "Postgres 16 runs on port 5433 for the photoselect project.\n"
+                        "- Razorpay OAuth breaks on trailing slash in redirect_uri.\n"))])
+        entries = FastExtractor.extract(s)
+        assert len(entries) >= 1, "document/memory sources must be searchable"
+        assert all(e.metadata.get("source_file") for e in entries), "must be traceable"
+
+    def test_conversation_without_patterns_still_searchable(self):
+        s = Session(source="goose", session_id="g1", metadata={"file_path": "/x/goose.jsonl"},
+                    messages=[Message(role="user", content="The user asked to navigate into the Downloads directory and list files."),
+                              Message(role="assistant", content="Summarized the conversation after a context-length error occurred mid-task.")])
+        entries = FastExtractor.extract(s)
+        assert len(entries) >= 1, "a no-pattern conversation should not vanish"
+
+    def test_traceability_from_varied_metadata_keys(self):
+        for key in ("file_path", "brain_dir", "workspace", "db_path"):
+            s = Session(source="x", session_id=f"s-{key}", metadata={key: f"/path/{key}"},
+                        messages=[Message(role="user", content="We will use Cloudflare R2 for object storage in prod.")])
+            entries = FastExtractor.extract(s)
+            assert entries and entries[0].metadata.get("source_file") == f"/path/{key}"
+
+    def test_questions_are_not_stored(self):
+        s = Session(source="claude-code", session_id="q1",
+                    messages=[Message(role="assistant", content="Did you use the invite URL to add the bot to your server?")])
+        # That sentence matches no decision pattern anyway; ensure a question that
+        # WOULD match a pattern is dropped by the readability guard.
+        s2 = Session(source="claude-code", session_id="q2",
+                     messages=[Message(role="user", content="Should we use Postgres for this?")])
+        contents = [e.content for e in FastExtractor.extract(s2)]
+        assert not any(c.rstrip().endswith("?") for c in contents)
