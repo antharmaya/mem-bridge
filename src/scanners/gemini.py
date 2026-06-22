@@ -81,22 +81,22 @@ def scan_gemini(home: Path) -> Iterator[Session]:
             if task_file.is_file():
                 try:
                     content = task_file.read_text(encoding="utf-8", errors="replace")
-                    if len(content) > 5000:
-                        logger.warning("Anti-Gravity task file truncated from %d to 5000 chars: %s", len(content), task_file)
+                    if len(content) > 50000:
+                        logger.warning("Anti-Gravity task file truncated from %d to 50000 chars: %s", len(content), task_file)
                     messages.append(Message(
                         role="system",
-                        content=f"Anti-Gravity Task: {task_dir.name}\n\n{content[:5000]}",
+                        content=f"Anti-Gravity Task: {task_dir.name}\n\n{content[:50000]}",
                     ))
                 except Exception:
                     logger.warning("Failed to read AG task: %s", task_file, exc_info=True)
             if impl_file.is_file():
                 try:
                     content = impl_file.read_text(encoding="utf-8", errors="replace")
-                    if len(content) > 5000:
-                        logger.warning("Anti-Gravity plan file truncated from %d to 5000 chars: %s", len(content), impl_file)
+                    if len(content) > 50000:
+                        logger.warning("Anti-Gravity plan file truncated from %d to 50000 chars: %s", len(content), impl_file)
                     messages.append(Message(
                         role="system",
-                        content=f"Implementation Plan: {task_dir.name}\n\n{content[:5000]}",
+                        content=f"Implementation Plan: {task_dir.name}\n\n{content[:50000]}",
                     ))
                 except Exception:
                     logger.warning("Failed to read AG plan: %s", impl_file, exc_info=True)
@@ -132,7 +132,7 @@ def scan_gemini(home: Path) -> Iterator[Session]:
                             content += f"Rows: {len(rows)}\n"
                             messages = [Message(
                                 role="system",
-                                content=content[:5000],
+                                content=content[:50000],
                                 metadata={"table": table_name},
                             )]
                             yield Session(

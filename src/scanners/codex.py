@@ -80,14 +80,14 @@ def scan_codex(home: Path) -> Iterator[Session]:
     if memory_file.is_file():
         try:
             content = memory_file.read_text(encoding="utf-8", errors="replace")
-            if len(content) > 8000:
-                logger.warning("Codex memory file truncated from %d to 8000 chars: %s", len(content), memory_file)
+            if len(content) > 50000:
+                logger.warning("Codex memory file truncated from %d to 50000 chars: %s", len(content), memory_file)
             yield Session(
                 source="codex-memory",
                 session_id=f"codex-memory-{hash(content) % 100000:05d}",
                 messages=[Message(
                     role="system",
-                    content=f"Codex Memory:\n\n{content[:8000]}",
+                    content=f"Codex Memory:\n\n{content[:50000]}",
                     metadata={"file_path": str(memory_file)},
                 )],
                 metadata={"file_path": str(memory_file), "is_memory": True},

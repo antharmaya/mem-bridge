@@ -23,14 +23,14 @@ def scan_cursor(home: Path) -> Iterator[Session]:
         for plan_file in plans_dir.glob("*.plan.md"):
             try:
                 content = plan_file.read_text(encoding="utf-8", errors="replace")
-                if len(content) > 5000:
-                    logger.warning("Cursor plan truncated from %d to 5000 chars: %s", len(content), plan_file)
+                if len(content) > 50000:
+                    logger.warning("Cursor plan truncated from %d to 50000 chars: %s", len(content), plan_file)
                 yield Session(
                     source="cursor",
                     session_id=f"plan-{plan_file.stem[:40]}",
                     messages=[Message(
                         role="system",
-                        content=f"Cursor Plan: {plan_file.name}\n\n{content[:5000]}",
+                        content=f"Cursor Plan: {plan_file.name}\n\n{content[:50000]}",
                     )],
                     metadata={"file_path": str(plan_file), "is_plan": True},
                 )

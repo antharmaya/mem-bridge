@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.4.3 (2026-06-22) — No content lost: recursive chunking replaces truncation
+
+Live test (Hermes/DeepSeek) flagged aggressive truncation losing content (memory
+files/plans cut at 8000/5000 chars). Fixed per 2026 RAG guidance (recursive
+chunking ~400–512 tokens, no overlap needed for lexical retrieval).
+
+- **Recursive document chunking** (`_chunk_document`): long memory files, IDE
+  plans, and tracking docs are split on paragraph/sentence boundaries into
+  ~1.4k-char chunks (≤60/file) instead of being truncated — **all content
+  preserved + searchable + traceable**. Bare short questions still dropped.
+- **Scanner caps raised 8000/5000 → 50000** for document sources so full files
+  reach the chunker (per-message conversation caps unchanged; the LLM path
+  re-bounds separately).
+- Verified on real data: full memory files now chunked, longest chunk 2000 chars,
+  nothing truncated under 50KB.
+- Note: also corrected stale audit findings — semantic (v0.4.1), temporal recall
+  + prefetch entity/timeframe parsing (v0.2.0) were already fixed; the test agent
+  had recalled pre-fix notes from the memory index.
+- Tests: 104 (green).
+
 ## v0.4.2 (2026-06-22) — Drift-proof briefings + reflection (completes the Brain)
 
 Nullification research (SSGM arXiv 2603.11768; memory survey 2603.07670; RAG-vs-

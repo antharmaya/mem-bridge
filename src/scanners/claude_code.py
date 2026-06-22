@@ -61,8 +61,8 @@ def scan_claude_code(home: Path) -> Iterator[Session]:
             for mem_file in memory_dir.glob("*.md"):
                 try:
                     content = mem_file.read_text(encoding="utf-8", errors="replace")
-                    if len(content) > 8000:
-                        logger.warning("Claude Code memory file truncated from %d to 8000 chars: %s", len(content), mem_file)
+                    if len(content) > 50000:
+                        logger.warning("Claude Code memory file truncated from %d to 50000 chars: %s", len(content), mem_file)
                     # Create a synthetic session for memory entries
                     # Include project in session_id to avoid collisions across projects
                     project_tag = project_dir.name.replace("/", "_").replace("\\", "_")
@@ -73,7 +73,7 @@ def scan_claude_code(home: Path) -> Iterator[Session]:
                         messages=[
                             Message(
                                 role="system",
-                                content=f"Claude Code Memory: {mem_file.stem}\n\n{content[:8000]}",
+                                content=f"Claude Code Memory: {mem_file.stem}\n\n{content[:50000]}",
                                 metadata={"file_path": str(mem_file)},
                             )
                         ],
