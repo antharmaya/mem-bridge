@@ -1263,3 +1263,64 @@ class TestSemanticFusion:
                                  source_agent="x", source_session="s", importance=0.8))
         res = index.search_rrf("cloudflare", query_embedding=None, limit=5)
         assert any("Cloudflare" in r.content for r in res), "RRF must work with FTS+graph alone"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TEST: BRIEFINGS + REFLECTION (v0.4.2 — drift-proof, deterministic)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestBriefAndReflection:
+    """Always-fresh briefings computed live; reflection that never mutates memories."""
+
+    def _seed(self, index):
+        from src.entities import extract_entities
+        for content, cat in [
+            ("Decided to use Cloudflare R2 for PhotoSelect storage", "decision"),
+            ("PhotoSelect backend runs Postgres on port 5433", "fact"),
+            ("PhotoSelect launch is set for Monday", "project"),
+        ]:
+            eid = index.upsert(MemoryEntry(content=content, category=cat, source_agent="claude-code",
+                                           source_session="sess-ps", importance=0.7,
+                                           created_at="2026-06-10T00:00:00+00:00"))
+            index.index_entities_for_entry(eid, extract_entities(content), "2026-06-10T00:00:00+00:00")
+
+    def test_brief_is_live_and_traceable(self, index):
+        self._seed(index)
+        b = index.brief("photoselect")
+        assert b and b["scope"] == "PhotoSelect"
+        assert b["entry_count"] >= 3
+        assert "cloudflare" in [c.lower() for c in b["connected_to"]] or "postgres" in [c.lower() for c in b["connected_to"]]
+        from src.indexer import format_brief
+        text = format_brief(b)
+        assert "PhotoSelect" in text and "memories" in text
+
+    def test_brief_reflects_new_facts_without_staleness(self, index):
+        self._seed(index)
+        before = index.brief("photoselect")["entry_count"]
+        from src.entities import extract_entities
+        eid = index.upsert(MemoryEntry(content="PhotoSelect now also uses Redis for queues", category="fact",
+                                       source_agent="codex", source_session="sess-ps2", importance=0.6))
+        index.index_entities_for_entry(eid, extract_entities("PhotoSelect now also uses Redis for queues"), "")
+        after = index.brief("photoselect")["entry_count"]
+        assert after == before + 1, "brief recomputes live — no stale cache"
+
+    def test_brief_flags_failed_decisions(self, index):
+        self._seed(index)
+        did = index.upsert_decision("Use a monolith for PhotoSelect", agent_source="claude-code", session_id="sess-ps")
+        index.mark_decision_outcome(did, -1, "had to split it later")
+        b = index.brief("photoselect")
+        assert any("monolith" in d["decision"].lower() for d in b["failed_decisions"])
+
+    def test_reflection_is_non_destructive(self, index):
+        did = index.upsert_decision("Skip tests to ship faster", agent_source="x", session_id="s")
+        index.mark_decision_outcome(did, -1, "regressions shipped")
+        before = index.stats()["total_entries"]
+        n = index.detect_insights()
+        assert n >= 1
+        # new lesson entry added; the original decision is untouched
+        assert index.stats()["total_entries"] == before + n
+        lessons = index.get_by_category("lesson")
+        assert any("avoid repeating" in l.content.lower() for l in lessons)
+        # idempotent: re-running doesn't duplicate (content-hash dedup)
+        index.detect_insights()
+        assert index.stats()["total_entries"] == before + n

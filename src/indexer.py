@@ -629,6 +629,120 @@ class MemoryIndex:
                 "ORDER BY mention_count DESC LIMIT ?", (limit,))
         return [{"name": r[0], "kind": r[1], "mentions": r[2]} for r in cur.fetchall()]
 
+    # ─── Briefings + reflection (drift-proof: computed live from atomic facts) ──
+
+    def brief(self, scope_key: str, max_items: int = 8) -> dict:
+        """A deterministic, always-fresh briefing for an entity/project.
+
+        Computed live from the immutable fact store + graph — never a stored,
+        mutated summary — so it cannot drift or go stale. Decisions are scoped
+        via the sessions of the matched memories, and contradicted/unverified
+        decisions are flagged rather than smoothed over.
+        """
+        canon = scope_key.strip().lower()
+        ent = self.conn.execute(
+            "SELECT id, display_name, kind, mention_count FROM entities WHERE name = ? "
+            "ORDER BY mention_count DESC LIMIT 1", (canon,)
+        ).fetchone()
+        if not ent:
+            return {}
+        eid, disp, kind, mentions = ent
+
+        rows = self.conn.execute(f"""
+            SELECT e.id, e.content, e.category, e.source_agent, e.source_session,
+                   e.importance, e.created_at, e.last_referenced, e.reference_count,
+                   e.tags, e.metadata
+            FROM entries e JOIN entity_mentions em ON em.entry_id = e.id
+            WHERE em.entity_id = ?
+            ORDER BY e.importance DESC, e.created_at DESC
+        """, (eid,)).fetchall()
+        entries = [self._row_to_entry(r) for r in rows]
+        dates = [e.created_at for e in entries if e.created_at]
+        sessions = {e.source_session for e in entries if e.source_session}
+
+        from collections import Counter
+        by_cat = dict(Counter(e.category for e in entries))
+
+        decisions = []
+        if sessions:
+            sp = ",".join("?" for _ in sessions)
+            try:
+                cur = self.conn.execute(
+                    f"SELECT decision_text, framework_used, outcome_verified, confidence "
+                    f"FROM structured_decisions WHERE session_id IN ({sp}) AND archived = 0 "
+                    f"ORDER BY extracted_at DESC LIMIT ?", list(sessions) + [max_items])
+                decisions = [
+                    {"decision": r[0], "framework": r[1], "outcome_verified": r[2], "confidence": r[3]}
+                    for r in cur.fetchall()
+                ]
+            except sqlite3.OperationalError:
+                decisions = []
+
+        nb = self.entity_neighborhood(canon, limit=20)
+        neighbors = nb.get("neighbors", [])
+        files = [n["name"] for n in neighbors if n["kind"] == "file"][:max_items]
+        connected = [n["name"] for n in neighbors if n["kind"] != "file"][:max_items]
+
+        return {
+            "scope": disp,
+            "kind": kind,
+            "entry_count": len(entries),
+            "date_span": [min(dates)[:10], max(dates)[:10]] if dates else None,
+            "by_category": by_cat,
+            "decisions": decisions,
+            "unverified_decisions": [d for d in decisions if d["outcome_verified"] == 0],
+            "failed_decisions": [d for d in decisions if d["outcome_verified"] == -1],
+            "top_memories": [
+                {"content": e.content, "category": e.category, "date": (e.created_at or "")[:10],
+                 "source_file": (e.metadata or {}).get("source_file", "")}
+                for e in entries[:max_items]
+            ],
+            "connected_to": connected,
+            "files": files,
+        }
+
+    def store_rollup(self, scope_kind: str, scope_key: str, summary: str, entry_count: int, model: str = "") -> None:
+        """Cache a rendered brief (for cheap prefetch/export). Truth stays in entries."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            "INSERT INTO rollups (scope_kind, scope_key, summary, entry_count, generated_at, model) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(scope_kind, scope_key) DO UPDATE SET "
+            "summary = excluded.summary, entry_count = excluded.entry_count, "
+            "generated_at = excluded.generated_at, model = excluded.model",
+            (scope_kind, scope_key.strip().lower(), summary, entry_count, now, model),
+        )
+        self.conn.commit()
+
+    def detect_insights(self) -> int:
+        """Reflection-as-DETECTION: surface failed/contradicted decisions as NEW atomic
+        lesson entries. Never mutates existing memories (SSGM-safe; dedup by content hash).
+        Returns the number of new insight entries written.
+        """
+        written = 0
+        try:
+            failed = self.conn.execute(
+                "SELECT decision_text, framework_used, agent_source, outcome_notes "
+                "FROM structured_decisions WHERE outcome_verified = -1 AND archived = 0"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return 0
+        for text, fw, agent, notes in failed:
+            content = f"Past decision that went badly — avoid repeating: {text}"
+            if notes:
+                content += f" (outcome: {notes})"
+            try:
+                self.upsert(MemoryEntry(
+                    content=content[:300], category="lesson", source_agent="memory-bridge",
+                    source_session="reflection", importance=0.85,
+                    tags=["reflection", "failed-decision", fw or "unknown"],
+                    metadata={"derived": True},
+                ))
+                written += 1
+            except Exception:
+                pass
+        return written
+
     # ─── Search ───────────────────────────────────────────────────────────
 
     _FTS_SELECT = """
@@ -1102,6 +1216,33 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+def format_brief(b: dict) -> str:
+    """Render a brief dict to a concise, front-loaded text block (budget-aware)."""
+    if not b:
+        return "No brief available — that project/entity isn't in the brain yet."
+    lines = [f"# {b['scope']} ({b['kind']}) — {b['entry_count']} memories"]
+    if b.get("date_span"):
+        lines.append(f"Active: {b['date_span'][0]} → {b['date_span'][1]}")
+    if b.get("connected_to"):
+        lines.append("Connected to: " + ", ".join(b["connected_to"][:8]))
+    if b.get("files"):
+        lines.append("Files: " + ", ".join(b["files"][:6]))
+    if b.get("failed_decisions"):
+        lines.append("\n⚠️  Decisions that went badly — do not repeat:")
+        for d in b["failed_decisions"]:
+            lines.append(f"  - {d['decision']}")
+    if b.get("decisions"):
+        verdict = {1: "✓", -1: "✗", 0: "…"}
+        lines.append("\nDecisions:")
+        for d in b["decisions"][:6]:
+            lines.append(f"  [{verdict.get(d['outcome_verified'], '…')}] ({d['framework']}) {d['decision']}")
+    if b.get("top_memories"):
+        lines.append("\nKey memories:")
+        for m in b["top_memories"][:6]:
+            lines.append(f"  - [{m['category']}] {m['content'][:120]}")
+    return "\n".join(lines)
 
 
 def _trigram_fuzzy_query(query: str) -> str:

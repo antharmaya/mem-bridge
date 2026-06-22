@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.2 (2026-06-22) — Drift-proof briefings + reflection (completes the Brain)
+
+Nullification research (SSGM arXiv 2603.11768; memory survey 2603.07670; RAG-vs-
+long-context 2026) showed a mutable self-improving LLM-wiki *degrades*: semantic
+drift, staleness ("worse than no recall"), poisoning, and a passive→active recall
+collapse. So this is deliberately NOT a Perplexity-Brain clone. Atomic facts stay
+the immutable, traceable source of truth; summaries never replace them.
+
+- **`brief(scope)`**: an always-fresh, deterministic briefing computed live from
+  facts + graph — entry counts, date span, decisions WITH outcomes (failed ones
+  flagged, not smoothed over), connected tools/files, key memories, source links.
+  No LLM in the truth path → zero hallucination, never stale.
+- **`detect_insights()`**: reflection-as-DETECTION — surfaces failed/contradicted
+  decisions as NEW atomic `lesson` entries (content-hash deduped, idempotent).
+  Never mutates existing memories (SSGM-safe: no drift, no poisoning of the store).
+- **`format_brief`** renderer; `memory_bridge_brief` tool; `memory-bridge brief
+  <scope>` + `memory-bridge reflect` CLI; reflection runs on scan.
+- `rollups` table used only as a freshness cache; truth is always recomputed live.
+- Tests: 100 → 104.
+
+Deferred to v0.4.3: optional on-demand `ctx.llm` narrative synthesized from the
+current facts at query time (agentic, cites sources, never stored-as-truth).
+
 ## v0.4.1 (2026-06-22) — Optional local semantic + hybrid RRF retrieval
 
 Real semantic recall without betraying local-first — the model2vec/sqlite-vec
