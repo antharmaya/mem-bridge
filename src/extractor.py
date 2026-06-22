@@ -494,17 +494,73 @@ class FastExtractor:
         return out
 
     @classmethod
+    def _chunk_document(cls, content: str, target: int = 1400, max_chunks: int = 60) -> list[str]:
+        """Recursively chunk a document into ~target-char pieces on paragraph/sentence
+        boundaries. Preserves all content (vs. truncating) — the 2026 RAG default
+        (recursive, ~400-512 tokens, no overlap needed for lexical retrieval)."""
+        text = (content or "").strip()
+        if not text:
+            return []
+        chunks: list[str] = []
+        buf = ""
+
+        def keep(s: str) -> bool:
+            s = s.strip()
+            # Drop empties, machine-noise, and bare short questions (low-value).
+            if len(s) < 20 or cls._looks_like_noise(s):
+                return False
+            if s.rstrip().endswith("?") and len(s) < 120:
+                return False
+            return True
+
+        def flush():
+            nonlocal buf
+            s = buf.strip()
+            if keep(s):
+                chunks.append(s[:2000])
+            buf = ""
+
+        for para in re.split(r"\n\s*\n", text):
+            para = para.strip()
+            if not para:
+                continue
+            if len(para) > int(target * 1.5):
+                flush()
+                cur = ""
+                for sent in re.split(r"(?<=[.!?])\s+", para):
+                    if len(cur) + len(sent) > target:
+                        if keep(cur):
+                            chunks.append(cur.strip()[:2000])
+                        cur = sent
+                    else:
+                        cur = (cur + " " + sent).strip()
+                    if len(chunks) >= max_chunks:
+                        return chunks[:max_chunks]
+                if keep(cur):
+                    chunks.append(cur.strip()[:2000])
+            elif len(buf) + len(para) > target:
+                flush()
+                buf = para
+            else:
+                buf = (buf + "\n\n" + para).strip()
+            if len(chunks) >= max_chunks:
+                return chunks[:max_chunks]
+        flush()
+        return chunks[:max_chunks]
+
+    @classmethod
     def _extract_document(cls, session: Session, when: str, meta: dict, seen: set,
-                          max_entries: int = 12) -> list[MemoryEntry]:
-        """Ingest a non-conversational session (already-distilled knowledge)."""
+                          max_entries: int = 60) -> list[MemoryEntry]:
+        """Ingest a non-conversational session by chunking — no content lost."""
         out = []
         for msg in session.messages:
-            for line in cls._doc_lines(msg.content):
-                if line in seen:
+            for chunk in cls._chunk_document(msg.content):
+                key = chunk[:120]
+                if key in seen:
                     continue
-                seen.add(line)
+                seen.add(key)
                 out.append(MemoryEntry(
-                    content=line,
+                    content=chunk,
                     category="fact",
                     source_agent=session.source,
                     source_session=session.session_id,
