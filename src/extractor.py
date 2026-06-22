@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from .indexer import MemoryEntry
@@ -424,6 +425,7 @@ class FastExtractor:
     def extract(cls, session: Session) -> list[MemoryEntry]:
         entries = []
         seen = set()  # Deduplicate within session
+        when = session_timestamp(session)  # conversation date, not scan date
 
         for msg in session.messages:
             if msg.role not in ("user", "assistant"):
@@ -442,6 +444,7 @@ class FastExtractor:
                                 source_agent=session.source,
                                 source_session=session.session_id,
                                 importance=cls.IMPORTANCE[category],
+                                created_at=when,
                                 tags=["auto-extracted", category],
                             ))
                         break  # One category per message
@@ -564,6 +567,43 @@ class SmartExtractor:
 
 # ─── Helpers ────────────────────────────────────────────────────────────
 
+def _normalize_ts(raw: Any) -> str:
+    """Coerce a timestamp (ISO string, epoch seconds/millis) to an ISO string, or ''."""
+    if raw is None:
+        return ""
+    try:
+        if isinstance(raw, (int, float)):
+            ts = float(raw)
+            if ts > 1e12:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+        s = str(raw).strip()
+        if not s:
+            return ""
+        if s.replace(".", "", 1).isdigit():
+            ts = float(s)
+            if ts > 1e12:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).isoformat()
+    except Exception:
+        return ""
+
+
+def session_timestamp(session: Session) -> str:
+    """Best-effort ISO timestamp for when a session actually happened.
+
+    Uses the latest parseable timestamp among the session's messages and its
+    started_at, so a memory is dated to the conversation — not to scan time.
+    Returns '' when nothing is parseable (indexer then falls back to now()).
+    """
+    stamps = [_normalize_ts(session.started_at)]
+    for m in session.messages:
+        stamps.append(_normalize_ts(getattr(m, "timestamp", None)))
+    stamps = [s for s in stamps if s]
+    return max(stamps) if stamps else ""
+
+
 def _format_conversation(session: Session, max_messages: int = 40) -> str:
     """Format session messages into a compact conversation transcript."""
     messages = session.messages[-max_messages:]
@@ -639,6 +679,7 @@ def _facts_to_entries(facts: list[dict], session: Session) -> list[MemoryEntry]:
             source_agent=session.source,
             source_session=session.session_id,
             importance=importance,
+            created_at=session_timestamp(session),
             tags=tags,
             metadata={
                 "project": session.project,

@@ -1039,3 +1039,49 @@ class TestStructuredDecisions:
         # stats reflects the verified decision
         s = index.stats()
         assert s["total_decisions"] == 1 and s["verified_decisions"] == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TEST: SCOPED RECALL (v0.2 — agent + timeframe)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestRecall:
+    """Temporal / per-agent recall — the retrieval shape plain FTS could not serve."""
+
+    def test_query_parsing(self):
+        from datetime import datetime, timezone
+        from src.recall_query import parse_recall_query
+        now = datetime(2026, 6, 22, tzinfo=timezone.utc)
+        p = parse_recall_query("what did i do with claude code last month 15th to 16th?", now=now)
+        assert p["agent"] == "claude-code"
+        assert p["since"].startswith("2026-05-15")
+        assert p["until"].startswith("2026-05-16")
+        assert p["is_recall"] is True
+        # A plain topical query is NOT a recall query.
+        assert parse_recall_query("show me the postgres decision")["is_recall"] is False
+
+    def test_session_timestamp_uses_conversation_date(self):
+        from src.extractor import session_timestamp
+        s = Session(source="claude-code", session_id="s", messages=[
+            Message(role="user", content="hi", timestamp="2026-05-15T10:00:00Z"),
+            Message(role="assistant", content="yo", timestamp="2026-05-16T11:00:00Z"),
+        ])
+        assert session_timestamp(s).startswith("2026-05-16")
+
+    def test_recall_filters_by_agent_and_date(self, index):
+        index.upsert(MemoryEntry(content="Chose Cloudflare R2 for storage", category="decision",
+                                 source_agent="claude-code", source_session="a",
+                                 importance=0.8, created_at="2026-05-15T12:00:00+00:00"))
+        index.upsert(MemoryEntry(content="Set up the codex pipeline", category="project",
+                                 source_agent="codex", source_session="b",
+                                 importance=0.5, created_at="2026-05-15T12:00:00+00:00"))
+        index.upsert(MemoryEntry(content="Old claude note", category="fact",
+                                 source_agent="claude-code", source_session="c",
+                                 importance=0.5, created_at="2026-01-01T12:00:00+00:00"))
+        # Agent + window scopes correctly.
+        hits = index.recall(agent="claude-code", since="2026-05-14", until="2026-05-16T23:59:59")
+        assert len(hits) == 1 and hits[0].content.startswith("Chose Cloudflare")
+        # Agent alone returns both claude entries, newest first.
+        assert len(index.recall(agent="claude-code")) == 2
+        # Date alone, no agent, spans agents.
+        assert len(index.recall(since="2026-05-14", until="2026-05-16")) == 2
