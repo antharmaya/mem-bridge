@@ -48,6 +48,7 @@ from .extractor import (
     extract_structured_decisions,
 )
 from .recall_query import parse_recall_query
+from .entities import extract_entities
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +146,15 @@ class AntharmayaMemoryProvider(MemoryProvider):
                     until=parsed["until"], limit=4,
                 )
             else:
+                # Blend lexical search with the brain's associative recall, so
+                # entries connected through shared entities surface too. FTS
+                # leads; graph fills in related memories it would have missed.
                 results = self._index.search_fts(query, limit=5)
+                seen_ids = {e.id for e in results}
+                for g in self._index.graph_recall(query, limit=4):
+                    if g.id not in seen_ids:
+                        seen_ids.add(g.id)
+                        results.append(g)
                 decisions = []
 
         if not results and not decisions:
@@ -320,6 +329,23 @@ class AntharmayaMemoryProvider(MemoryProvider):
                 },
             },
             {
+                "name": "memory_bridge_brain",
+                "description": (
+                    "Explore the memory brain — an entity graph linking your projects, "
+                    "tools, products, and files across all agents. Pass a query for "
+                    "associative recall (memories connected through shared entities), "
+                    "or an entity name to see what it's connected to. Use to understand "
+                    "how things relate, not just to find a single fact."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Associative recall query"},
+                        "entity": {"type": "string", "description": "Entity name to map its neighborhood"},
+                    },
+                },
+            },
+            {
                 "name": "memory_bridge_decisions",
                 "description": (
                     "List structured decisions consolidated from your past AI agent "
@@ -361,6 +387,8 @@ class AntharmayaMemoryProvider(MemoryProvider):
             return self._handle_scan(args)
         elif tool_name == "memory_bridge_recall":
             return self._handle_recall(args)
+        elif tool_name == "memory_bridge_brain":
+            return self._handle_brain(args)
         elif tool_name == "memory_bridge_decisions":
             return self._handle_decisions(args)
         else:
@@ -410,6 +438,25 @@ class AntharmayaMemoryProvider(MemoryProvider):
             **stats,
             "available_scanners": scanners,
         })
+
+    def _handle_brain(self, args: dict) -> str:
+        """Explore the entity graph: associative recall and/or entity neighborhood."""
+        if not self._index:
+            return json.dumps({"error": "Index not initialized"})
+        out: Dict[str, Any] = {}
+        with self._prefetch_lock:
+            entity = args.get("entity")
+            query = args.get("query")
+            if entity:
+                out["neighborhood"] = self._index.entity_neighborhood(entity)
+            if query:
+                out["associative"] = [
+                    {"content": e.content, "category": e.category, "source": e.source_agent}
+                    for e in self._index.graph_recall(query, limit=10)
+                ]
+            if not entity and not query:
+                out["top_entities"] = self._index.top_entities(limit=20)
+        return json.dumps(out)
 
     def _handle_recall(self, args: dict) -> str:
         """Scoped recall: parse the question for agent + timeframe, then recall."""
@@ -500,7 +547,13 @@ class AntharmayaMemoryProvider(MemoryProvider):
                 entries = FastExtractor.extract(session)
 
             for entry in entries:
-                self._index.upsert(entry)
+                entry_id = self._index.upsert(entry)
+                # Build the brain graph: link this memory to its entities.
+                try:
+                    ents = extract_entities(entry.content, (entry.metadata or {}).get("project"))
+                    self._index.index_entities_for_entry(entry_id, ents, entry.created_at)
+                except Exception as e:
+                    logger.debug("[antharmaya-bridge] entity indexing skipped: %s", e)
 
             # Promote decisions into the structured_decisions table (Remember).
             for d in extract_structured_decisions(session, entries):

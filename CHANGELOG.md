@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.0 (2026-06-22) — The Brain: a local cross-agent context graph
+
+Foundation of the memory brain — a knowledge graph over your memories, built
+local-first (no graph DB, no cloud). Research brief informed by HippoRAG,
+GraphRAG, Generative Agents, Graphiti/Zep, mem0, and Perplexity Brain.
+
+- **Entity graph (schema v4)**: `entities`, `entity_mentions`, `entity_edges`,
+  `rollups` tables. Nodes = projects / tech / products / files; edges = weighted
+  co-occurrence. Built incrementally during scan.
+- **Hybrid entity extraction** (`entities.py`): deterministic rules/lexicon
+  first (free, offline); `ctx.llm` enrichment to follow. Encoded project paths
+  cleaned to readable names.
+- **Associative recall** (`graph_recall`): query → entities → 1-hop neighbors →
+  ranked memories (HippoRAG-lite spreading activation, in SQLite). Blended into
+  `prefetch()` alongside FTS so connected memories surface automatically.
+- **Map**: `entity_neighborhood` + `top_entities`; `memory_bridge_brain` tool +
+  `memory-bridge brain [entity]` CLI.
+- Verified on real data: 412 entities / 2,709 mentions / 1,498 edges; v2→v4
+  migration preserves all entries.
+- Next (v0.4.1/0.4.2): optional semantic (model2vec + sqlite-vec) + RRF fusion;
+  reflection loop + per-project LLM-wiki rollups.
+- Tests: 93 → 96.
+
 ## v0.3.0 (2026-06-22) — Framework-agnostic: an MCP server for any agent
 
 Memory Bridge was Hermes-only; the index it builds is host-neutral. v0.3 frees it.

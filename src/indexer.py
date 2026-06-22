@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Schema versioning ───────────────────────────────────────────────────
 
-SCHEMA_VERSION = 3  # Increment when schema changes
+SCHEMA_VERSION = 4  # Increment when schema changes
 
 # Schema migrations: version -> SQL to execute
 SCHEMA_MIGRATIONS = {
@@ -163,6 +163,55 @@ SCHEMA_MIGRATIONS = {
 
         -- Rebuild FTS5 index to ensure consistency after schema migration
         INSERT INTO entries_fts(entries_fts) VALUES('rebuild');
+    """,
+    4: """
+        -- ── The Brain: a local entity/relationship graph over the memories ──
+        -- Nodes: entities (projects, people, tech, files, products, concepts).
+        CREATE TABLE IF NOT EXISTS entities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,              -- canonical key (lowercased)
+            display_name TEXT NOT NULL,      -- original casing
+            kind TEXT NOT NULL,              -- project|person|tech|file|product|org|concept
+            mention_count INTEGER NOT NULL DEFAULT 0,
+            first_seen TEXT NOT NULL DEFAULT '',
+            last_seen TEXT NOT NULL DEFAULT '',
+            UNIQUE(name, kind)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entities_kind ON entities(kind);
+        CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+
+        -- Edges (entity -> memory): which entries mention an entity.
+        CREATE TABLE IF NOT EXISTS entity_mentions (
+            entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+            entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+            PRIMARY KEY (entity_id, entry_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_mentions_entry ON entity_mentions(entry_id);
+
+        -- Edges (entity -> entity): weighted co-occurrence / typed relations.
+        CREATE TABLE IF NOT EXISTS entity_edges (
+            src_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+            dst_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+            relation TEXT NOT NULL DEFAULT 'co_occurs',
+            weight REAL NOT NULL DEFAULT 1.0,
+            last_seen TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (src_id, dst_id, relation)
+        );
+        CREATE INDEX IF NOT EXISTS idx_edges_src ON entity_edges(src_id);
+
+        -- Reflective layer: per-project / per-entity "LLM-wiki" rollups.
+        CREATE TABLE IF NOT EXISTS rollups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope_kind TEXT NOT NULL,        -- project|entity
+            scope_key TEXT NOT NULL,         -- canonical scope identifier
+            summary TEXT NOT NULL,
+            entry_count INTEGER NOT NULL DEFAULT 0,
+            generated_at TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            UNIQUE(scope_kind, scope_key)
+        );
+
+        INSERT OR IGNORE INTO index_meta (key, value) VALUES ('schema_version', '4');
     """,
 }
 
@@ -457,6 +506,128 @@ class MemoryIndex:
         )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    # ─── The Brain: entity graph (HippoRAG-lite associative recall) ──────────
+
+    def upsert_entity(self, display_name: str, kind: str, when: str = "") -> int:
+        """Insert/refresh an entity node; returns its id."""
+        name = display_name.strip().lower()
+        now = when or datetime.now(timezone.utc).isoformat()
+        row = self.conn.execute(
+            "SELECT id FROM entities WHERE name = ? AND kind = ?", (name, kind)
+        ).fetchone()
+        if row:
+            eid = row[0]
+            self.conn.execute(
+                "UPDATE entities SET mention_count = mention_count + 1, "
+                "last_seen = MAX(last_seen, ?) WHERE id = ?", (now, eid)
+            )
+        else:
+            cur = self.conn.execute(
+                "INSERT INTO entities (name, display_name, kind, mention_count, first_seen, last_seen) "
+                "VALUES (?, ?, ?, 1, ?, ?)", (name, display_name, kind, now, now)
+            )
+            eid = cur.lastrowid
+        return eid
+
+    def index_entities_for_entry(self, entry_id: int, entities: list[tuple[str, str]], when: str = "") -> None:
+        """Link an entry to its entities and build co-occurrence edges between them."""
+        if not entities:
+            return
+        now = when or datetime.now(timezone.utc).isoformat()
+        eids = []
+        for display, kind in entities:
+            eid = self.upsert_entity(display, kind, now)
+            eids.append(eid)
+            self.conn.execute(
+                "INSERT OR IGNORE INTO entity_mentions (entity_id, entry_id) VALUES (?, ?)",
+                (eid, entry_id),
+            )
+        # Undirected co-occurrence edges (store both directions for cheap lookup).
+        for i in range(len(eids)):
+            for j in range(i + 1, len(eids)):
+                a, b = eids[i], eids[j]
+                for s, d in ((a, b), (b, a)):
+                    self.conn.execute(
+                        "INSERT INTO entity_edges (src_id, dst_id, relation, weight, last_seen) "
+                        "VALUES (?, ?, 'co_occurs', 1.0, ?) "
+                        "ON CONFLICT(src_id, dst_id, relation) DO UPDATE SET "
+                        "weight = weight + 1.0, last_seen = MAX(last_seen, ?)",
+                        (s, d, now, now),
+                    )
+        self.conn.commit()
+
+    def graph_recall(self, query: str, limit: int = 20, expand: bool = True) -> list[MemoryEntry]:
+        """Associative recall: query → entities → (1-hop neighbors) → memories.
+
+        Ranks entries by how many of the query's entities (and their strongest
+        neighbors) they mention, then recency. This is the graph leg of retrieval.
+        """
+        from .entities import extract_entities
+        ents = [n.lower() for n, _ in extract_entities(query)]
+        if not ents:
+            return []
+        placeholders = ",".join("?" for _ in ents)
+        seed_ids = [r[0] for r in self.conn.execute(
+            f"SELECT id FROM entities WHERE name IN ({placeholders})", ents
+        ).fetchall()]
+        if not seed_ids:
+            return []
+
+        ids = set(seed_ids)
+        if expand:
+            sp = ",".join("?" for _ in seed_ids)
+            for r in self.conn.execute(
+                f"SELECT dst_id FROM entity_edges WHERE src_id IN ({sp}) "
+                f"ORDER BY weight DESC LIMIT 25", seed_ids
+            ).fetchall():
+                ids.add(r[0])
+
+        idp = ",".join("?" for _ in ids)
+        rows = self.conn.execute(f"""
+            SELECT e.id, e.content, e.category, e.source_agent, e.source_session,
+                   e.importance, e.created_at, e.last_referenced, e.reference_count,
+                   e.tags, e.metadata, COUNT(DISTINCT em.entity_id) AS hits
+            FROM entries e
+            JOIN entity_mentions em ON em.entry_id = e.id
+            WHERE em.entity_id IN ({idp})
+            GROUP BY e.id
+            ORDER BY hits DESC, e.importance DESC, e.created_at DESC
+            LIMIT ?
+        """, list(ids) + [limit]).fetchall()
+        return [self._row_to_entry(r[:11]) for r in rows]
+
+    def entity_neighborhood(self, name: str, limit: int = 15) -> dict:
+        """Return an entity and its strongest connected entities (for the map view)."""
+        canon = name.strip().lower()
+        row = self.conn.execute(
+            "SELECT id, display_name, kind, mention_count FROM entities WHERE name = ? "
+            "ORDER BY mention_count DESC LIMIT 1", (canon,)
+        ).fetchone()
+        if not row:
+            return {}
+        eid = row[0]
+        neighbors = self.conn.execute("""
+            SELECT en.display_name, en.kind, ed.weight
+            FROM entity_edges ed JOIN entities en ON en.id = ed.dst_id
+            WHERE ed.src_id = ? ORDER BY ed.weight DESC LIMIT ?
+        """, (eid, limit)).fetchall()
+        return {
+            "entity": {"name": row[1], "kind": row[2], "mentions": row[3]},
+            "neighbors": [{"name": n[0], "kind": n[1], "weight": n[2]} for n in neighbors],
+        }
+
+    def top_entities(self, kind: str | None = None, limit: int = 20) -> list[dict]:
+        """Most-mentioned entities (optionally filtered by kind)."""
+        if kind:
+            cur = self.conn.execute(
+                "SELECT display_name, kind, mention_count FROM entities WHERE kind = ? "
+                "ORDER BY mention_count DESC LIMIT ?", (kind, limit))
+        else:
+            cur = self.conn.execute(
+                "SELECT display_name, kind, mention_count FROM entities "
+                "ORDER BY mention_count DESC LIMIT ?", (limit,))
+        return [{"name": r[0], "kind": r[1], "mentions": r[2]} for r in cur.fetchall()]
 
     # ─── Search ───────────────────────────────────────────────────────────
 

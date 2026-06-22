@@ -9,6 +9,7 @@ Usage:
   memory-bridge quality           Show extraction quality metrics
   memory-bridge decisions         List structured decisions consolidated from agents
   memory-bridge recall <question> Recall what you did with an agent in a time window
+  memory-bridge brain [entity]    Explore the entity graph (top entities or a map)
   memory-bridge mcp               Run the MCP server (stdio) for any MCP client
   memory-bridge consolidate       Deep LLM consolidation of all unscanned sessions
   memory-bridge repair            Repair corrupted index
@@ -31,6 +32,7 @@ def cmd_scan(args):
     from src.scanner import discover_all
     from src.indexer import MemoryIndex
     from src.extractor import FastExtractor, SmartExtractor, extract_structured_decisions
+    from src.entities import extract_entities
     from src.config import get_default_db_path
 
     home = Path(args.home) if args.home else Path.home()
@@ -91,7 +93,12 @@ def cmd_scan(args):
                 entries = FastExtractor.extract(session)
 
             for entry in entries:
-                index.upsert(entry)
+                entry_id = index.upsert(entry)
+                try:
+                    ents = extract_entities(entry.content, (entry.metadata or {}).get("project"))
+                    index.index_entities_for_entry(entry_id, ents, entry.created_at)
+                except Exception:
+                    pass
 
             # Promote decisions into the structured_decisions table.
             for d in extract_structured_decisions(session, entries):
@@ -413,6 +420,33 @@ def cmd_vacuum(args):
     print(f"✅ Vacuum complete. {before / 1024:.1f} KB → {after / 1024:.1f} KB (saved {saved / 1024:.1f} KB)")
 
 
+def cmd_brain(args):
+    """Explore the memory brain — top entities, or one entity's neighborhood."""
+    from src.indexer import MemoryIndex
+    from src.config import get_default_db_path
+
+    db_path = get_default_db_path()
+    if not db_path.exists():
+        print("No memory index found. Run 'memory-bridge scan' first.")
+        return
+    index = MemoryIndex(db_path)
+    if args.entity:
+        nb = index.entity_neighborhood(" ".join(args.entity))
+        if not nb:
+            print("Entity not found in the brain.")
+        else:
+            e = nb["entity"]
+            print(f"🧠 {e['name']}  ({e['kind']} · {e['mentions']} mentions)")
+            print("   connected to:")
+            for n in nb["neighbors"]:
+                print(f"     ~ {n['name']} ({n['kind']})  · weight {round(n['weight'])}")
+    else:
+        print("🧠 Top entities in your brain:")
+        for e in index.top_entities(limit=25):
+            print(f"   [{e['kind']:<8}] {e['name']} — {e['mentions']} mentions")
+    index.close()
+
+
 def cmd_mcp(args):
     """Run the MCP server (stdio) so any MCP client can use the unified index."""
     from src.mcp_server import serve
@@ -452,6 +486,11 @@ def main():
     quality.set_defaults(func=cmd_quality)
 
     # decisions
+    # brain
+    brain = sub.add_parser("brain", help="Explore the entity graph (top entities, or an entity's map)")
+    brain.add_argument("entity", nargs="*", help="Entity to map (omit for top entities)")
+    brain.set_defaults(func=cmd_brain)
+
     # recall
     recall = sub.add_parser("recall", help="Recall what happened with an agent in a time window")
     recall.add_argument("question", nargs="+", help="e.g. recall what did I do with claude code last month 15th to 16th")

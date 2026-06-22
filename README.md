@@ -124,6 +124,7 @@ Exposes four tools to the client: `search_memory`, `recall` (time/agent-scoped),
 /memory_bridge_stats                    # See what's been consolidated
 /memory_bridge_search "razorpay auth"   # Search all agent memories
 /memory_bridge_recall "what did I do with Claude Code last month"  # Agent + time-scoped recall
+/memory_bridge_brain "photoselect"      # Explore the entity graph / associative recall
 /memory_bridge_decisions                # Review structured decisions + outcomes
 /memory_bridge_scan                     # Re-scan for new conversations
 ```
@@ -134,6 +135,7 @@ Or use the CLI:
 hermes memory-bridge scan               # Scan for new agent histories
 hermes memory-bridge search "deploy"    # Search your unified memory
 hermes memory-bridge recall "what did I do with codex last week"  # Time/agent recall
+hermes memory-bridge brain photoselect  # Entity graph: what's connected to what
 hermes memory-bridge decisions          # List structured decisions + outcomes
 hermes memory-bridge stats              # Show memory statistics
 ```
