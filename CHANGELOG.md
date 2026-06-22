@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.2.1 (2026-06-22) — Every entry searchable, readable, traceable
+
+An audit found ~30% of sources contributed ZERO searchable memory: FastExtractor
+only read user/assistant turns + keyword patterns, so memory files, IDE plans, and
+tracking DBs (antigravity, claude-code-memory, codex-memory, cursor, goose — 132
+sessions) were invisible. And rules-based entries carried no origin path.
+
+- **Coverage**: a document fallback now ingests any session that keyword
+  extraction misses — non-conversational sources AND conversations that match no
+  pattern — as readable, length-bounded fact lines. Every session is now
+  searchable (previously-dropped sources went 0 → hundreds of entries each).
+- **Traceability**: every entry now carries `metadata.source_file` (+ project),
+  resolved across scanner conventions (`file_path` / `db_path` / `brain_dir` /
+  `workspace` / `path`). Verified 100% of entries traceable to their origin file.
+- **Readability**: questions and code/symbol fragments are dropped from both the
+  keyword and document paths, so stored entries read as durable statements.
+- Tests: 84 → 88.
+
 ## v0.2.0 (2026-06-22) — Scoped recall that actually fires
 
 Driven by a live failure: asked "what did I do with Claude Code on May 15-16?",

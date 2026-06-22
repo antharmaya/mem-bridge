@@ -426,10 +426,13 @@ class FastExtractor:
         entries = []
         seen = set()  # Deduplicate within session
         when = session_timestamp(session)  # conversation date, not scan date
+        meta = cls._trace_meta(session)    # source_file + project, for traceability
 
+        has_conversation = False
         for msg in session.messages:
             if msg.role not in ("user", "assistant"):
                 continue
+            has_conversation = True
             text_lower = msg.content.lower()
 
             for category, patterns in cls.PATTERNS.items():
@@ -446,10 +449,73 @@ class FastExtractor:
                                 importance=cls.IMPORTANCE[category],
                                 created_at=when,
                                 tags=["auto-extracted", category],
+                                metadata=dict(meta),
                             ))
                         break  # One category per message
 
+        # Document fallback: whenever keyword extraction finds nothing — a
+        # non-conversational source (memory file, IDE plan, tracking DB) OR a
+        # conversation that matched no patterns — salvage readable lines so no
+        # session is ever invisible to search.
+        if not entries:
+            entries.extend(cls._extract_document(session, when, meta, seen))
+
         return entries
+
+    # Metadata keys, across scanners, that point at an entry's origin on disk.
+    _TRACE_KEYS = ("file_path", "db_path", "brain_dir", "workspace", "path")
+
+    @classmethod
+    def _trace_meta(cls, session: Session) -> dict:
+        """Origin metadata so every entry is traceable back to its source."""
+        source_file = ""
+        for k in cls._TRACE_KEYS:
+            v = session.metadata.get(k)
+            if v:
+                source_file = str(v)
+                break
+        return {"project": session.project, "source_file": source_file}
+
+    @classmethod
+    def _doc_lines(cls, content: str) -> list[str]:
+        """Pull readable statement-lines out of a document (memory file/plan)."""
+        out = []
+        for raw in (content or "").splitlines():
+            s = raw.strip().lstrip("#->*•").strip()
+            s = re.sub(r"^\d+[\.\)]\s*", "", s)  # numbered list markers
+            s = s.strip().strip("|").strip()
+            if (
+                20 <= len(s) <= 300
+                and any(c.isalpha() for c in s)
+                and not s.rstrip().endswith("?")
+                and not cls._looks_like_noise(s)
+            ):
+                out.append(s)
+        return out
+
+    @classmethod
+    def _extract_document(cls, session: Session, when: str, meta: dict, seen: set,
+                          max_entries: int = 12) -> list[MemoryEntry]:
+        """Ingest a non-conversational session (already-distilled knowledge)."""
+        out = []
+        for msg in session.messages:
+            for line in cls._doc_lines(msg.content):
+                if line in seen:
+                    continue
+                seen.add(line)
+                out.append(MemoryEntry(
+                    content=line,
+                    category="fact",
+                    source_agent=session.source,
+                    source_session=session.session_id,
+                    importance=0.4,
+                    created_at=when,
+                    tags=["document", session.source],
+                    metadata=dict(meta),
+                ))
+                if len(out) >= max_entries:
+                    return out
+        return out
 
     # Substrings that mark machine output (log lines, JSON blobs, stack traces)
     # rather than durable human knowledge.
@@ -485,7 +551,12 @@ class FastExtractor:
             end = len(text)
 
         sentence = text[start:end].strip().strip('.,;:')
-        if 15 < len(sentence) < 300 and not FastExtractor._looks_like_noise(sentence):
+        # Readability: durable statements only — skip questions and noise/fragments.
+        if (
+            15 < len(sentence) < 300
+            and not sentence.rstrip().endswith("?")
+            and not FastExtractor._looks_like_noise(sentence)
+        ):
             return sentence
         return None
 
