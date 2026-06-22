@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.0 (2026-06-22) — Framework-agnostic: an MCP server for any agent
+
+Memory Bridge was Hermes-only; the index it builds is host-neutral. v0.3 frees it.
+
+- **Zero-dependency MCP server** (`src/mcp_server.py`): a Model Context Protocol
+  server over stdio JSON-RPC — no SDK, stdlib only — so any MCP client (Claude
+  Desktop, Cursor, Codex, Windsurf) can use the same local index. Verified against
+  a real `initialize` / `tools/list` / `tools/call` handshake.
+- Tools exposed: `search_memory`, `recall` (time/agent-scoped), `list_decisions`,
+  `memory_stats`.
+- **`memory-bridge mcp`** CLI command launches the server; one-line client config
+  in the README.
+- Keeps the local-first identity mem0 traded away: no graph DB, no cloud, no key.
+- Tests: 88 → 93.
+
 ## v0.2.1 (2026-06-22) — Every entry searchable, readable, traceable
 
 An audit found ~30% of sources contributed ZERO searchable memory: FastExtractor

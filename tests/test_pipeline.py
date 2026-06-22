@@ -1128,3 +1128,50 @@ class TestCoverageAndTrace:
                      messages=[Message(role="user", content="Should we use Postgres for this?")])
         contents = [e.content for e in FastExtractor.extract(s2)]
         assert not any(c.rstrip().endswith("?") for c in contents)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TEST: MCP SERVER (v0.3 — framework-agnostic frontend, zero-dep JSON-RPC)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestMcpServer:
+    """The stdio JSON-RPC frontend any MCP client (Cursor, Claude Desktop) can use."""
+
+    def test_initialize_handshake(self):
+        from src.mcp_server import handle_message
+        r = handle_message({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                            "params": {"protocolVersion": "2025-06-18"}})
+        assert r["id"] == 1
+        assert r["result"]["protocolVersion"] == "2025-06-18"
+        assert r["result"]["serverInfo"]["name"] == "antharmaya-memory-bridge"
+        assert "tools" in r["result"]["capabilities"]
+
+    def test_initialized_notification_has_no_response(self):
+        from src.mcp_server import handle_message
+        assert handle_message({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
+
+    def test_tools_list(self):
+        from src.mcp_server import handle_message
+        r = handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        names = {t["name"] for t in r["result"]["tools"]}
+        assert {"search_memory", "recall", "list_decisions", "memory_stats"}.issubset(names)
+
+    def test_tools_call_search(self, index):
+        from src.mcp_server import handle_message
+        index.upsert(MemoryEntry(content="Decided to use Cloudflare R2 for object storage",
+                                 category="decision", source_agent="claude-code",
+                                 source_session="s", importance=0.8))
+        # inject the temp index via execute_tool through handle_message's tools/call
+        import src.mcp_server as mcp
+        r = mcp.handle_message(
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+             "params": {"name": "search_memory", "arguments": {"query": "cloudflare"}}},
+            index=index,
+        )
+        assert r["result"]["isError"] is False
+        assert "Cloudflare" in r["result"]["content"][0]["text"]
+
+    def test_unknown_method_errors(self):
+        from src.mcp_server import handle_message
+        r = handle_message({"jsonrpc": "2.0", "id": 9, "method": "bogus/method"})
+        assert r["error"]["code"] == -32601

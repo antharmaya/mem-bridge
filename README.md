@@ -95,6 +95,27 @@ Memory Bridge classifies every fact into one of six categories:
 
 ---
 
+## Use it from any agent (MCP)
+
+Memory Bridge began as a Hermes plugin, but the index it builds is host-neutral.
+It ships a **zero-dependency MCP server** (stdio, JSON-RPC) so **any MCP client** —
+Claude Desktop, Cursor, Codex, Windsurf — can search, recall, and review the same
+local index. No SDK, no extra dependency.
+
+```jsonc
+// Claude Desktop / Cursor — mcpServers config
+{
+  "mcpServers": {
+    "memory-bridge": { "command": "memory-bridge", "args": ["mcp"] }
+  }
+}
+```
+
+Exposes four tools to the client: `search_memory`, `recall` (time/agent-scoped),
+`list_decisions`, and `memory_stats`. Run it directly with `memory-bridge mcp`.
+
+---
+
 ## Usage
 
 ### In Hermes (after install)
