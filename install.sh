@@ -10,7 +10,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/antharmaya/mem-bridge.git"
 REPO_DIR="${HOME}/.hermes/plugins/memory/antharmaya-bridge"
-VERSION="${VERSION:-v0.4.0}"
+VERSION="${VERSION:-v0.4.1}"
 
 BOLD="\033[1m"
 GREEN="\033[32m"

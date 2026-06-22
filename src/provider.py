@@ -49,6 +49,7 @@ from .extractor import (
 )
 from .recall_query import parse_recall_query
 from .entities import extract_entities
+from . import embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -146,15 +147,11 @@ class AntharmayaMemoryProvider(MemoryProvider):
                     until=parsed["until"], limit=4,
                 )
             else:
-                # Blend lexical search with the brain's associative recall, so
-                # entries connected through shared entities surface too. FTS
-                # leads; graph fills in related memories it would have missed.
-                results = self._index.search_fts(query, limit=5)
-                seen_ids = {e.id for e in results}
-                for g in self._index.graph_recall(query, limit=4):
-                    if g.id not in seen_ids:
-                        seen_ids.add(g.id)
-                        results.append(g)
+                # Hybrid retrieval: fuse lexical (FTS) + associative (graph) +
+                # optional semantic (embeddings) via RRF. Semantic drops out
+                # automatically when the optional backend isn't installed.
+                qv = embeddings.embed_one(query) if embeddings.available() else None
+                results = self._index.search_rrf(query, query_embedding=qv, limit=6)
                 decisions = []
 
         if not results and not decisions:
@@ -574,6 +571,14 @@ class AntharmayaMemoryProvider(MemoryProvider):
                 len(session.messages),
             )
             new_count += 1
+
+        # Backfill semantic vectors for new entries (optional; no-op if the
+        # embedding backend isn't installed).
+        if embeddings.available():
+            try:
+                self._index.backfill_embeddings(embeddings.embed)
+            except Exception as e:
+                logger.debug("[antharmaya-bridge] embedding backfill skipped: %s", e)
 
         stats = self._index.stats()
 

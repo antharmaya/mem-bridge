@@ -1225,3 +1225,41 @@ class TestBrainGraph:
             index.index_entities_for_entry(eid, extract_entities("docker and docker compose"), "")
         top = {e["name"] for e in index.top_entities(kind="tech")}
         assert "docker" in top
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TEST: SEMANTIC + RRF FUSION (v0.4.1 — optional, degrades gracefully)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestSemanticFusion:
+    """Vector storage + cosine search + RRF, all without requiring model2vec."""
+
+    def test_embeddings_backend_optional(self):
+        from src import embeddings
+        # In CI model2vec isn't installed → backend disabled, no crash.
+        assert embeddings.embed_one("anything") is None or isinstance(embeddings.embed_one("anything"), list)
+
+    def test_store_and_semantic_search(self, index):
+        a = index.upsert(MemoryEntry(content="cloudflare workers edge deploy", category="fact",
+                                     source_agent="x", source_session="s", importance=0.5))
+        b = index.upsert(MemoryEntry(content="postgres database tuning", category="fact",
+                                     source_agent="x", source_session="s", importance=0.5))
+        index.store_embedding(a, [1.0, 0.0, 0.0])
+        index.store_embedding(b, [0.0, 1.0, 0.0])
+        res = index.search_semantic([0.9, 0.1, 0.0], limit=1)
+        assert res and res[0].id == a, "nearest vector should win"
+
+    def test_backfill_with_injected_embedder_is_idempotent(self, index):
+        for i in range(3):
+            index.upsert(MemoryEntry(content=f"entry number {i}", category="fact",
+                                     source_agent="x", source_session="s", importance=0.5))
+        fake = lambda texts: [[float(len(t)), 1.0, 0.0] for t in texts]
+        assert index.backfill_embeddings(fake) == 3
+        assert index.embedding_count() == 3
+        assert index.backfill_embeddings(fake) == 0  # nothing left to embed
+
+    def test_rrf_degrades_without_embeddings(self, index):
+        index.upsert(MemoryEntry(content="Decided to use Cloudflare R2 for storage", category="decision",
+                                 source_agent="x", source_session="s", importance=0.8))
+        res = index.search_rrf("cloudflare", query_embedding=None, limit=5)
+        assert any("Cloudflare" in r.content for r in res), "RRF must work with FTS+graph alone"
