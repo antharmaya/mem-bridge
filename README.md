@@ -138,6 +138,7 @@ hermes memory-bridge search "deploy"    # Search your unified memory
 hermes memory-bridge recall "what did I do with codex last week"  # Time/agent recall
 hermes memory-bridge brain photoselect  # Entity graph: what's connected to what
 hermes memory-bridge brief photoselect  # Always-fresh briefing for a project/entity
+hermes memory-bridge verify 7 bad "prod data got corrupted"  # Record an outcome → becomes a lesson
 hermes memory-bridge reflect            # Surface failed decisions as lessons
 hermes memory-bridge decisions          # List structured decisions + outcomes
 hermes memory-bridge stats              # Show memory statistics

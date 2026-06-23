@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.5.0 (2026-06-23) — The decision loop closes (Council ⨉ Bridge, self-correcting)
+
+Decide → Remember → Verify → Learn, end to end. The system now improves from its
+own outcomes — and a decision that went badly is surfaced as a lesson so it isn't
+repeated.
+
+- **`import_council_decisions()`**: a read-only, one-way pull of decisions logged by
+  Council of Hats into `structured_decisions`, back-linked via `decision_log_id`.
+  No code dependency on Council, no writes to its DB; no-op if Council isn't
+  installed. Runs automatically on scan.
+- **Verify step**: `memory_bridge_verify_decision` tool + `memory-bridge verify <id>
+  good|bad|unset` CLI. Marking a decision **bad** immediately runs reflection, turning
+  it into a `lesson` that `prefetch()` injects on future turns.
+- The loop: Council decides → Bridge remembers (extracted + imported) → you verify the
+  outcome → reflection surfaces failures as lessons → prefetch prevents the repeat.
+- Tests: 104 → 108 (Council import + idempotency + verify→lesson + good-outcome no-op).
+
 ## v0.4.3 (2026-06-22) — No content lost: recursive chunking replaces truncation
 
 Live test (Hermes/DeepSeek) flagged aggressive truncation losing content (memory

@@ -1,6 +1,6 @@
 [project]
 name = "antharmaya-memory-bridge"
-version = "0.4.3"
+version = "0.5.0"
 description = "Unified agent memory for Hermes — photographic memory of every AI conversation"
 readme = "README.md"
 license = { text = "MIT" }
