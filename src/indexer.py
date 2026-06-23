@@ -499,6 +499,59 @@ class MemoryIndex:
         self.conn.commit()
         return cur.rowcount > 0
 
+    def import_council_decisions(self, decision_log_path: str | Path | None = None) -> int:
+        """Pull decisions logged by Council of Hats into structured_decisions.
+
+        Closes the Decide → Remember loop: decisions deliberately made through a
+        Council pattern become first-class, verifiable records in the Brain (with
+        `decision_log_id` back-linking to Council's log). One-way, READ-ONLY pull
+        of Council's SQLite file — no code dependency, no writes to Council's DB.
+        No-op if Council isn't installed. Returns the number imported.
+        """
+        import os
+
+        path = str(decision_log_path or (Path.home() / ".hermes" / "decisions" / "decision_log.db"))
+        if not os.path.exists(path):
+            return 0
+        try:
+            src = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        except Exception:
+            return 0
+        try:
+            cols = [r[1] for r in src.execute("PRAGMA table_info(decisions)").fetchall()]
+            if "answer" not in cols or "pattern" not in cols:
+                return 0  # legacy/incompatible Council schema — skip safely
+            archived = "archived" in cols
+            where = "WHERE COALESCE(archived, 0) = 0" if archived else ""
+            rows = src.execute(
+                f"SELECT id, pattern, question, answer, context, confidence FROM decisions {where}"
+            ).fetchall()
+        except Exception:
+            return 0
+        finally:
+            src.close()
+
+        imported = 0
+        for cid, pattern, question, answer, context, confidence in rows:
+            text = (answer or "").strip()
+            if len(text) < 10 and question:
+                text = f"{(question or '').strip()} — {text}".strip(" —")
+            if len(text) < 3:
+                continue
+            try:
+                self.upsert_decision(
+                    text,
+                    agent_source="council",
+                    framework_used=pattern or "unknown",
+                    rationale=(context or None),
+                    decision_log_id=str(cid),
+                    confidence=float(confidence or 1.0),
+                )
+                imported += 1
+            except Exception:
+                continue
+        return imported
+
     def list_frameworks(self) -> list[dict]:
         """Return the framework catalog (decision disciplines)."""
         cur = self.conn.execute(

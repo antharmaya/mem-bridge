@@ -387,6 +387,24 @@ class AntharmayaMemoryProvider(MemoryProvider):
                     },
                 },
             },
+            {
+                "name": "memory_bridge_verify_decision",
+                "description": (
+                    "Record how a past decision actually turned out — this is how the "
+                    "system learns. Mark it 'good', 'bad', or 'unset'. A 'bad' outcome is "
+                    "immediately surfaced as a lesson so the decision isn't repeated. Get "
+                    "decision ids from memory_bridge_decisions (unverified_only=true)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "decision_id": {"type": "integer", "description": "The structured_decisions id"},
+                        "outcome": {"type": "string", "description": "good | bad | unset"},
+                        "notes": {"type": "string", "description": "What happened (optional)"},
+                    },
+                    "required": ["decision_id", "outcome"],
+                },
+            },
         ]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
@@ -407,6 +425,8 @@ class AntharmayaMemoryProvider(MemoryProvider):
             return self._handle_brief(args)
         elif tool_name == "memory_bridge_decisions":
             return self._handle_decisions(args)
+        elif tool_name == "memory_bridge_verify_decision":
+            return self._handle_verify_decision(args)
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
@@ -513,6 +533,24 @@ class AntharmayaMemoryProvider(MemoryProvider):
             ],
         })
 
+    def _handle_verify_decision(self, args: dict) -> str:
+        """Mark a decision's outcome; a 'bad' outcome immediately becomes a lesson."""
+        if not self._index:
+            return json.dumps({"error": "Index not initialized"})
+        mapping = {"good": 1, "bad": -1, "unset": 0}
+        outcome = mapping.get(str(args.get("outcome", "")).lower())
+        if outcome is None:
+            return json.dumps({"error": "outcome must be one of: good, bad, unset"})
+        try:
+            decision_id = int(args.get("decision_id"))
+        except (TypeError, ValueError):
+            return json.dumps({"error": "decision_id must be an integer"})
+        with self._prefetch_lock:
+            ok = self._index.mark_decision_outcome(decision_id, outcome, args.get("notes"))
+            lessons = self._index.detect_insights() if outcome == -1 else 0
+        return json.dumps({"updated": ok, "decision_id": decision_id,
+                           "outcome": args.get("outcome"), "lessons_surfaced": lessons})
+
     def _handle_decisions(self, args: dict) -> str:
         """List structured decisions consolidated from agent conversations."""
         if not self._index:
@@ -608,6 +646,13 @@ class AntharmayaMemoryProvider(MemoryProvider):
                 self._index.backfill_embeddings(embeddings.embed)
             except Exception as e:
                 logger.debug("[antharmaya-bridge] embedding backfill skipped: %s", e)
+
+        # Close the Decide → Remember loop: pull Council-logged decisions into the
+        # Brain (read-only; no-op if Council isn't installed).
+        try:
+            self._index.import_council_decisions()
+        except Exception as e:
+            logger.debug("[antharmaya-bridge] council import skipped: %s", e)
 
         # Reflection-as-detection: surface failed decisions as new lesson entries
         # (deterministic, non-destructive — never mutates existing memories).

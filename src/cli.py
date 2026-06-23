@@ -11,6 +11,7 @@ Usage:
   memory-bridge recall <question> Recall what you did with an agent in a time window
   memory-bridge brain [entity]    Explore the entity graph (top entities or a map)
   memory-bridge brief <scope>     Always-fresh briefing for a project/entity
+  memory-bridge verify <id> good|bad|unset   Record how a decision turned out
   memory-bridge reflect           Surface failed decisions as lessons (non-destructive)
   memory-bridge mcp               Run the MCP server (stdio) for any MCP client
   memory-bridge consolidate       Deep LLM consolidation of all unscanned sessions
@@ -125,6 +126,14 @@ def cmd_scan(args):
         n = index.backfill_embeddings(_emb.embed)
         if n:
             print(f"Embedded {n} new entries for semantic search.")
+
+    # Close the decision loop: pull Council decisions in, then surface failures as lessons.
+    council_n = index.import_council_decisions()
+    if council_n:
+        print(f"Imported {council_n} Council decisions.")
+    insights = index.detect_insights()
+    if insights:
+        print(f"Reflection surfaced {insights} lesson(s) from failed decisions.")
 
     stats = index.stats()
     print()
@@ -470,6 +479,32 @@ def cmd_brief(args):
     index.close()
 
 
+def cmd_verify(args):
+    """Mark how a past decision turned out — the loop's 'verify' step."""
+    from src.indexer import MemoryIndex
+    from src.config import get_default_db_path
+
+    db_path = get_default_db_path()
+    if not db_path.exists():
+        print("No memory index found. Run 'memory-bridge scan' first.")
+        return
+    outcome = {"good": 1, "bad": -1, "unset": 0}.get(args.outcome)
+    if outcome is None:
+        print("outcome must be: good | bad | unset")
+        return
+    index = MemoryIndex(db_path)
+    ok = index.mark_decision_outcome(args.id, outcome, " ".join(args.note) or None)
+    if not ok:
+        print(f"No decision with id {args.id}. List them: memory-bridge decisions --unverified")
+    else:
+        verdict = {1: "✓ worked", -1: "✗ failed", 0: "unset"}[outcome]
+        print(f"Decision {args.id} marked: {verdict}")
+        if outcome == -1:
+            n = index.detect_insights()
+            print(f"🪞 Surfaced {n} lesson(s) so it won't be repeated.")
+    index.close()
+
+
 def cmd_reflect(args):
     """Surface failed/contradicted decisions as new lesson entries (non-destructive)."""
     from src.indexer import MemoryIndex
@@ -558,6 +593,13 @@ def main():
     brief = sub.add_parser("brief", help="Always-fresh briefing for a project/entity")
     brief.add_argument("scope", nargs="+", help="Project or entity name (e.g. photoselect)")
     brief.set_defaults(func=cmd_brief)
+
+    # verify
+    verify = sub.add_parser("verify", help="Mark how a past decision turned out (good/bad/unset)")
+    verify.add_argument("id", type=int, help="Decision id (from `decisions --unverified`)")
+    verify.add_argument("outcome", choices=["good", "bad", "unset"], help="How it turned out")
+    verify.add_argument("note", nargs="*", help="What happened (optional)")
+    verify.set_defaults(func=cmd_verify)
 
     # reflect
     reflect = sub.add_parser("reflect", help="Surface failed decisions as lessons (non-destructive)")

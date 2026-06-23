@@ -1324,3 +1324,62 @@ class TestBriefAndReflection:
         # idempotent: re-running doesn't duplicate (content-hash dedup)
         index.detect_insights()
         assert index.stats()["total_entries"] == before + n
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TEST: DECISION → OUTCOME → LESSON LOOP (v0.5.0 — Council ⨉ Bridge)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestDecisionLoop:
+    """Council decisions flow in; outcomes verified; failures become lessons."""
+
+    def _fake_council_db(self, tmp_path):
+        import sqlite3
+        db = tmp_path / "decision_log.db"
+        c = sqlite3.connect(str(db))
+        c.execute("""CREATE TABLE decisions (id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern TEXT, question TEXT, answer TEXT, context TEXT, session_id TEXT,
+            confidence REAL DEFAULT 1.0, created_at TEXT, reviewed INTEGER DEFAULT 0,
+            archived INTEGER DEFAULT 0)""")
+        c.execute("INSERT INTO decisions (pattern, question, answer, context, confidence) VALUES (?,?,?,?,?)",
+                  ("tradeoff_matrix", "Cloud vs self-host?", "Use Cloudflare Workers for the edge API", "cost + latency", 0.8))
+        c.execute("INSERT INTO decisions (pattern, question, answer, context, confidence) VALUES (?,?,?,?,?)",
+                  ("failure_modes", "What's the blast radius?", "Add a circuit breaker on the payment path", "outage risk", 0.7))
+        c.commit(); c.close()
+        return db
+
+    def test_import_council_decisions(self, index, tmp_path):
+        db = self._fake_council_db(tmp_path)
+        n = index.import_council_decisions(db)
+        assert n == 2
+        decisions = index.get_decisions()
+        assert len(decisions) == 2
+        sources = {d["agent_source"] for d in decisions}
+        assert sources == {"council"}
+        # back-link to Council's log is preserved
+        assert all(d["decision_log_id"] for d in decisions)
+        frameworks = {d["framework_used"] for d in decisions}
+        assert "tradeoff_matrix" in frameworks
+        # idempotent (dedup by content hash)
+        assert index.import_council_decisions(db) == 0 or len(index.get_decisions()) == 2
+
+    def test_import_is_noop_without_council(self, index, tmp_path):
+        assert index.import_council_decisions(tmp_path / "does-not-exist.db") == 0
+
+    def test_verify_bad_outcome_becomes_lesson(self, index):
+        did = index.upsert_decision("Skip the migration dry-run to save time",
+                                    agent_source="council", framework_used="failure_modes")
+        # verify it failed → reflection turns it into a lesson
+        assert index.mark_decision_outcome(did, -1, "prod data got corrupted")
+        n = index.detect_insights()
+        assert n >= 1
+        lessons = [l.content for l in index.get_by_category("lesson")]
+        assert any("avoid repeating" in c.lower() for c in lessons)
+
+    def test_verify_good_outcome_no_lesson(self, index):
+        did = index.upsert_decision("Use Postgres for the primary store",
+                                    agent_source="council", framework_used="tradeoff_matrix")
+        index.mark_decision_outcome(did, 1, "held up fine")
+        before = index.stats()["total_entries"]
+        index.detect_insights()  # only failed decisions become lessons
+        assert index.stats()["total_entries"] == before
