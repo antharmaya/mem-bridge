@@ -5,7 +5,7 @@ set -euo pipefail
 #
 #   curl -fsSL https://antharmaya.com/memory-bridge/install.sh | bash
 #
-# Installs the unified agent memory plugin for Hermes Agent.
+# Installs the unified agent memory plugin for Hermes (Antharmaya's own orchestrator).
 # Gives Hermes photographic memory of every AI conversation you've ever had.
 
 REPO_URL="https://github.com/antharmaya/mem-bridge.git"
