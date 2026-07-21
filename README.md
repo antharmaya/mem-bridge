@@ -3,9 +3,9 @@
 **Give your Hermes agent photographic memory of every AI conversation you've ever had.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Hermes Plugin](https://img.shields.io/badge/Hermes-Plugin-blue)](https://hermes-agent.nousresearch.com)
+[![Hermes Plugin](https://img.shields.io/badge/Hermes-Plugin-blue)](https://antharmaya.com)
 
-Memory Bridge auto-discovers every AI agent conversation on your machine — Claude Code, Codex, Gemini, Cursor, OpenCode, Goose, and more — and consolidates them into a unified, searchable memory index that Hermes can query in real-time.
+Memory Bridge auto-discovers every AI agent conversation on your machine — Claude Code, Codex, Gemini, Cursor, OpenCode, Goose, and more — and consolidates them into a unified, searchable memory index that Hermes (Antharmaya's own always-on orchestrator — not affiliated with any other project of the same name) can query in real-time.
 
 ```bash
 curl -fsSL https://antharmaya.com/memory-bridge/install.sh | bash
