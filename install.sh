@@ -8,9 +8,10 @@ set -euo pipefail
 # Installs the unified agent memory plugin for Hermes (Antharmaya's own orchestrator).
 # Gives Hermes photographic memory of every AI conversation you've ever had.
 
-REPO_URL="https://github.com/antharmaya/mem-bridge.git"
-REPO_DIR="${HOME}/.hermes/plugins/memory/antharmaya-bridge"
+# Overridable so forks, mirrors and the installer tests can point elsewhere.
+REPO_URL="${REPO_URL:-https://github.com/antharmaya/mem-bridge.git}"
 VERSION="${VERSION:-v0.5.0}"
+# REPO_DIR is derived from HERMES_HOME once that is resolved, below.
 
 BOLD="\033[1m"
 GREEN="\033[32m"
@@ -65,41 +66,111 @@ fi
 
 # ─── Check for Hermes ──────────────────────────────────────────────────────
 
-HERMES_HOME=""
-if [ -n "${HERMES_HOME:-}" ]; then
-    HERMES_HOME="$HERMES_HOME"
-elif [ -d "${HOME}/.hermes" ]; then
+# Honour an externally set HERMES_HOME; fall back to the default location.
+HERMES_HOME="${HERMES_HOME:-}"
+if [ -z "$HERMES_HOME" ] && [ -d "${HOME}/.hermes" ]; then
     HERMES_HOME="${HOME}/.hermes"
 fi
 
 if [ -z "$HERMES_HOME" ]; then
-    echo -e "${YELLOW}!${RESET} Hermes Agent not detected."
+    echo -e "${YELLOW}!${RESET} Hermes not detected — installing to the default location."
     echo "  Memory Bridge works best with Hermes, but the standalone CLI also works."
-    echo "  Install Hermes: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+    echo "  Set HERMES_HOME to install somewhere else."
     echo ""
+    HERMES_HOME="${HOME}/.hermes"
 fi
+
+# Everything the installer writes lives under HERMES_HOME.
+REPO_DIR="${HERMES_HOME}/plugins/memory/antharmaya-bridge"
+INDEX_DIR="${HERMES_HOME}/antharmaya-memory"
 
 # ─── Clone / Update ────────────────────────────────────────────────────────
 
-if [ -d "$REPO_DIR/.git" ]; then
+# $REPO_DIR can be in any of these states. Testing only `-d $REPO_DIR/.git`
+# missed most of them and fell through to a clone onto an occupied path, which
+# dies with "could not create work tree dir ... File exists":
+#   absent                          -> clone
+#   our checkout                    -> update in place
+#   symlink (live or dangling)      -> replace the link, never write through it
+#   unrelated directory or repo     -> move aside, then clone
+# Nothing is deleted; anything displaced is renamed with a timestamp.
+
+is_our_checkout() {
+    [ -d "$1/.git" ] || return 1
+    local origin
+    origin="$(git -C "$1" remote get-url origin 2>/dev/null || true)"
+    [ -n "$origin" ] || return 1
+    # Whatever REPO_URL is configured (fork, mirror, test), plus every spelling
+    # of the canonical remote (https/ssh, with or without .git).
+    [ "$origin" = "$REPO_URL" ] && return 0
+    case "$origin" in
+        *antharmaya/mem-bridge*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+move_aside() {
+    local backup="${1}.backup-$(date +%Y%m%d-%H%M%S)"
+    mv "$1" "$backup"
+    echo -e "    Saved as: ${backup}"
+}
+
+mkdir -p "$(dirname "$REPO_DIR")"
+
+NEEDS_CLONE=1
+if [ -L "$REPO_DIR" ]; then
+    # Nearly always a developer checkout linked in. Updating through the link
+    # would run `git checkout` inside a live working tree, so move the link.
+    echo -e "  ${YELLOW}!${RESET} Found a symlink to $(readlink "$REPO_DIR") — replacing it."
+    move_aside "$REPO_DIR"
+elif is_our_checkout "$REPO_DIR"; then
+    NEEDS_CLONE=0
+elif [ -e "$REPO_DIR" ]; then
+    echo -e "  ${YELLOW}!${RESET} $REPO_DIR exists but is not a Memory Bridge checkout."
+    move_aside "$REPO_DIR"
+fi
+
+if [ "$NEEDS_CLONE" -eq 0 ]; then
     echo -e "  ${GREEN}✓${RESET} Already installed — updating..."
     cd "$REPO_DIR"
-    git fetch origin
-    git checkout "$VERSION"
-    git pull --ff-only origin "$VERSION" 2>/dev/null || true
+    # A --depth 1 clone carries only the tag it was cloned at, so fetch the
+    # wanted tag explicitly or every later release is an "unknown revision".
+    git fetch --depth 1 origin "refs/tags/${VERSION}:refs/tags/${VERSION}" 2>/dev/null \
+        || git fetch --tags origin 2>/dev/null \
+        || true
+    if ! git checkout --force "$VERSION" 2>/dev/null; then
+        echo -e "${RED}✗${RESET} Could not check out ${VERSION} in $REPO_DIR"
+        echo "  Reinstall cleanly with:"
+        echo "    rm -rf \"$REPO_DIR\""
+        echo "    curl -fsSL https://antharmaya.com/memory-bridge/install.sh | bash"
+        exit 1
+    fi
 else
     echo -e "  Downloading..."
-    mkdir -p "$(dirname "$REPO_DIR")"
     git clone --depth 1 --branch "$VERSION" "$REPO_URL" "$REPO_DIR"
     cd "$REPO_DIR"
+fi
+
+# The clone/update logic above is the part that has broken in the field, so let
+# the tests exercise it without scanning the whole machine afterwards.
+if [ -n "${MEMORY_BRIDGE_SETUP_ONLY:-}" ]; then
+    echo -e "  ${GREEN}✓${RESET} Setup complete (MEMORY_BRIDGE_SETUP_ONLY)"
+    exit 0
 fi
 
 # ─── Install Python dependencies ───────────────────────────────────────────
 
 echo -e "  Installing dependencies..."
 
-# Use pip to install only what's needed (stdlib-heavy, minimal deps)
-"$PYTHON" -m pip install --quiet --user pyyaml 2>/dev/null || true
+# Stdlib-heavy by design; pyyaml is the only extra, and only for Hermes config
+# writing. Report the truth rather than hiding a failed install behind || true.
+if ! "$PYTHON" -c "import yaml" 2>/dev/null; then
+    "$PYTHON" -m pip install --quiet --user pyyaml 2>/dev/null || true
+    if ! "$PYTHON" -c "import yaml" 2>/dev/null; then
+        echo -e "  ${YELLOW}!${RESET} pyyaml not installed — Hermes config writing will be skipped."
+        echo "    Install it with: $PYTHON -m pip install --user pyyaml"
+    fi
+fi
 
 # ─── Verify ────────────────────────────────────────────────────────────────
 
@@ -145,7 +216,7 @@ from src.indexer import MemoryIndex
 from src.extractor import FastExtractor
 
 home = Path.home()
-index = MemoryIndex(Path.home() / '.hermes' / 'antharmaya-memory' / 'index.db')
+index = MemoryIndex(Path('$INDEX_DIR') / 'index.db')
 sessions = discover_all(home)
 
 new = 0
@@ -185,7 +256,7 @@ import sys
 sys.path.insert(0, '$REPO_DIR')
 from pathlib import Path
 from src.indexer import MemoryIndex
-index = MemoryIndex(Path.home() / '.hermes' / 'antharmaya-memory' / 'index.db')
+index = MemoryIndex(Path('$INDEX_DIR') / 'index.db')
 stats = index.stats()
 print(f'  🧠 {stats[\"total_entries\"]} memories consolidated')
 print(f'  📂 {stats[\"processed_sessions\"]} agent sessions processed')
