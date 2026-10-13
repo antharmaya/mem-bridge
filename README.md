@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Hermes Plugin](https://img.shields.io/badge/Hermes-Plugin-blue)](https://antharmaya.com)
 
-Memory Bridge auto-discovers every AI agent conversation on your machine — Claude Code, Codex, Gemini, Cursor, OpenCode, Goose, and more — and consolidates them into a unified, searchable memory index that Hermes (Antharmaya's own always-on orchestrator — not affiliated with any other project of the same name) can query in real-time.
+Memory Bridge auto-discovers every AI agent conversation on your machine — Claude Code, Codex, Gemini, Cursor, OpenCode, Goose, and more — and consolidates them into a unified, searchable memory index that [Hermes Agent](https://hermes-agent.nousresearch.com) can query in real time. Memory Bridge is an independent plugin for Hermes Agent, which is built by Nous Research; it is not affiliated with or endorsed by them.
 
 ```bash
 curl -fsSL https://antharmaya.com/memory-bridge/install.sh | bash

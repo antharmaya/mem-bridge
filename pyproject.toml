@@ -21,7 +21,7 @@ semantic = [
 ]
 
 [project.urls]
-Homepage = "https://antharmaya.com/memory-bridge"
+Homepage = "https://antharmaya.com/tools/memory-bridge"
 Repository = "https://github.com/antharmaya/mem-bridge"
 
 [project.scripts]

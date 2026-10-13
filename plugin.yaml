@@ -7,7 +7,7 @@ platforms: [linux, macos, windows]
 
 metadata:
   hermes:
-    homepage: "https://antharmaya.com/memory-bridge"
+    homepage: "https://antharmaya.com/tools/memory-bridge"
     repository: "https://github.com/antharmaya/mem-bridge"
     tags: [memory, agent-history, consolidation, claude-code, codex, gemini]
     category: Memory & Context

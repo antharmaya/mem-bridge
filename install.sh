@@ -5,7 +5,8 @@ set -euo pipefail
 #
 #   curl -fsSL https://antharmaya.com/memory-bridge/install.sh | bash
 #
-# Installs the unified agent memory plugin for Hermes (Antharmaya's own orchestrator).
+# Installs the unified agent memory plugin for Hermes Agent (by Nous Research; this
+# plugin is independent and not affiliated with them).
 # Gives Hermes photographic memory of every AI conversation you've ever had.
 
 # Overridable so forks, mirrors and the installer tests can point elsewhere.
@@ -287,6 +288,6 @@ echo "      --name \"memory-bridge-daily-scan\" \\"
 echo "      --prompt \"Run memory_bridge_scan use_llm=true to import new agent conversations\""
 echo ""
 echo ""
-echo -e "  ${CYAN}antharmaya.com/memory-bridge${RESET}  |  ${CYAN}github.com/antharmaya/mem-bridge${RESET}"
+echo -e "  ${CYAN}antharmaya.com/tools/memory-bridge${RESET}  |  ${CYAN}github.com/antharmaya/mem-bridge${RESET}"
 echo ""
 echo "  This is open-source software. Contributions welcome!"
