@@ -11,7 +11,7 @@ set -euo pipefail
 
 # Overridable so forks, mirrors and the installer tests can point elsewhere.
 REPO_URL="${REPO_URL:-https://github.com/antharmaya/mem-bridge.git}"
-VERSION="${VERSION:-v0.5.0}"
+VERSION="${VERSION:-v0.6.0}"
 # REPO_DIR is derived from HERMES_HOME once that is resolved, below.
 
 BOLD="\033[1m"
@@ -37,33 +37,27 @@ check_cmd() {
 }
 
 check_cmd git
-check_cmd python3
 
 # ─── Detect Python ─────────────────────────────────────────────────────────
 
+# Take the first interpreter that is 3.11+, not merely the first one found:
+# a system python3 that is too old must not hide an installed python3.12.
 PYTHON=""
-for candidate in python3 python3.11 python3.12 python3.13; do
-    if command -v "$candidate" &>/dev/null; then
-        PYTHON="$candidate"
+for candidate in python3 python3.14 python3.13 python3.12 python3.11; do
+    if command -v "$candidate" &>/dev/null \
+        && "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+        PYTHON="$(command -v "$candidate")"
         break
     fi
 done
 
 if [ -z "$PYTHON" ]; then
-    echo -e "${RED}✗${RESET} No Python 3 found"
+    echo -e "${RED}✗${RESET} Python 3.11+ required (looked for python3, python3.11 … python3.14)"
     exit 1
 fi
 
 PYTHON_VERSION=$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-echo -e "  Python: ${GREEN}$PYTHON_VERSION${RESET}"
-
-# Check Python version >= 3.11
-PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
-PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
-if [ "$PYTHON_MAJOR" -lt 3 ] || [ "$PYTHON_MAJOR" -eq 3 -a "$PYTHON_MINOR" -lt 11 ]; then
-    echo -e "${RED}✗${RESET} Python 3.11+ required, found $PYTHON_VERSION"
-    exit 1
-fi
+echo -e "  Python: ${GREEN}$PYTHON_VERSION${RESET} ($PYTHON)"
 
 # ─── Check for Hermes ──────────────────────────────────────────────────────
 
@@ -81,9 +75,15 @@ if [ -z "$HERMES_HOME" ]; then
     HERMES_HOME="${HOME}/.hermes"
 fi
 
-# Everything the installer writes lives under HERMES_HOME.
-REPO_DIR="${HERMES_HOME}/plugins/memory/antharmaya-bridge"
+# Everything the installer writes lives under HERMES_HOME, except the
+# `memory-bridge` command, which goes in BIN_DIR.
+# Hermes (0.10+) discovers user-installed memory providers in
+# $HERMES_HOME/plugins/<name>/. Up to v0.5.0 this installer used
+# $HERMES_HOME/plugins/memory/<name>/, which Hermes never scans.
+REPO_DIR="${HERMES_HOME}/plugins/antharmaya-bridge"
+LEGACY_DIR="${HERMES_HOME}/plugins/memory/antharmaya-bridge"
 INDEX_DIR="${HERMES_HOME}/antharmaya-memory"
+BIN_DIR="${MEMORY_BRIDGE_BIN_DIR:-${HOME}/.local/bin}"
 
 # ─── Clone / Update ────────────────────────────────────────────────────────
 
@@ -118,6 +118,15 @@ move_aside() {
 
 mkdir -p "$(dirname "$REPO_DIR")"
 
+# Carry a v0.5.x install over from the old location instead of re-cloning.
+if [ ! -e "$REPO_DIR" ] && [ ! -L "$REPO_DIR" ] \
+    && [ ! -L "$LEGACY_DIR" ] && is_our_checkout "$LEGACY_DIR"; then
+    echo -e "  ${YELLOW}!${RESET} Moving the old install to the location Hermes actually scans:"
+    echo "    $LEGACY_DIR -> $REPO_DIR"
+    mv "$LEGACY_DIR" "$REPO_DIR"
+    rmdir "$(dirname "$LEGACY_DIR")" 2>/dev/null || true
+fi
+
 NEEDS_CLONE=1
 if [ -L "$REPO_DIR" ]; then
     # Nearly always a developer checkout linked in. Updating through the link
@@ -139,7 +148,7 @@ if [ "$NEEDS_CLONE" -eq 0 ]; then
     git fetch --depth 1 origin "refs/tags/${VERSION}:refs/tags/${VERSION}" 2>/dev/null \
         || git fetch --tags origin 2>/dev/null \
         || true
-    if ! git checkout --force "$VERSION" 2>/dev/null; then
+    if ! git -c advice.detachedHead=false checkout --force "$VERSION" 2>/dev/null; then
         echo -e "${RED}✗${RESET} Could not check out ${VERSION} in $REPO_DIR"
         echo "  Reinstall cleanly with:"
         echo "    rm -rf \"$REPO_DIR\""
@@ -148,7 +157,7 @@ if [ "$NEEDS_CLONE" -eq 0 ]; then
     fi
 else
     echo -e "  Downloading..."
-    git clone --depth 1 --branch "$VERSION" "$REPO_URL" "$REPO_DIR"
+    git -c advice.detachedHead=false clone --depth 1 --branch "$VERSION" "$REPO_URL" "$REPO_DIR"
     cd "$REPO_DIR"
 fi
 
@@ -178,11 +187,11 @@ fi
 echo ""
 echo -e "  Running self-test..."
 
-"$PYTHON" -c "
-import sys
-sys.path.insert(0, '$REPO_DIR')
-from src.scanner import get_available_scanners
+PYTHONPATH="$REPO_DIR" "$PYTHON" -c "
+from memory_bridge import __version__
+from memory_bridge.scanner import get_available_scanners
 scanners = get_available_scanners()
+print(f'  memory-bridge {__version__}')
 print(f'  Scanners available: {len(scanners)}')
 for s in scanners:
     print(f'    • {s}')
@@ -193,55 +202,52 @@ for s in scanners:
 
 echo ""
 
+# ─── Put the CLI on PATH ───────────────────────────────────────────────────
+
+# A small wrapper that runs this checkout with the interpreter chosen above.
+# It never replaces a memory-bridge it did not write (e.g. one from
+# `pip install memory-bridge`); the marker line identifies its own.
+WRAPPER_MARKER="# memory-bridge-installer-wrapper"
+WRAPPER="${BIN_DIR}/memory-bridge"
+CLI_ON_PATH=0
+WROTE_WRAPPER=0
+mkdir -p "$BIN_DIR"
+if [ -e "$WRAPPER" ] && ! grep -qF "$WRAPPER_MARKER" "$WRAPPER" 2>/dev/null; then
+    echo -e "  ${YELLOW}!${RESET} $WRAPPER exists and was not written by this installer — leaving it alone."
+else
+    cat > "$WRAPPER" <<WRAPPER_EOF
+#!/usr/bin/env bash
+$WRAPPER_MARKER
+# Written by the Memory Bridge installer; rerunning it rewrites this file.
+# Runs the plugin checkout in $REPO_DIR
+export HERMES_HOME="\${HERMES_HOME:-$HERMES_HOME}"
+export PYTHONPATH="$REPO_DIR\${PYTHONPATH:+:\$PYTHONPATH}"
+exec "$PYTHON" -m memory_bridge "\$@"
+WRAPPER_EOF
+    chmod +x "$WRAPPER"
+    WROTE_WRAPPER=1
+    echo -e "  ${GREEN}✓${RESET} Installed the memory-bridge command: $WRAPPER"
+fi
+case ":${PATH}:" in
+    *":${BIN_DIR}:"*) CLI_ON_PATH=1 ;;
+    *)
+        echo -e "  ${YELLOW}!${RESET} $BIN_DIR is not on your PATH. Add this to your shell profile:"
+        echo "    export PATH=\"$BIN_DIR:\$PATH\""
+        ;;
+esac
+
+echo ""
+
 # ─── Initial scan ──────────────────────────────────────────────────────────
 
-HAS_API_KEY="${MEMORY_BRIDGE_API_KEY:-${OPENROUTER_API_KEY:-}}"
-if [ -n "$HAS_API_KEY" ]; then
-    USE_LLM_FLAG=""
-    echo -e "  ${GREEN}✓${RESET} API key detected — LLM-powered extraction enabled"
-else
-    echo -e "  ${YELLOW}!${RESET} No API key set — rules-based extraction only"
-    echo "  Set MEMORY_BRIDGE_API_KEY for deep LLM consolidation"
-fi
-
-echo ""
-echo -e "  Running initial scan of your agent histories..."
+# The first scan is rules-based only: no network calls, no API key needed.
+# Deep LLM extraction comes later, through Hermes' own model (the
+# memory_bridge_scan tool) or `memory-bridge scan` with MEMORY_BRIDGE_API_KEY.
+echo -e "  Running initial scan of your agent histories (rules-based, offline)..."
 echo ""
 
-"$PYTHON" -c "
-import sys
-sys.path.insert(0, '$REPO_DIR')
-from pathlib import Path
-from src.scanner import discover_all
-from src.indexer import MemoryIndex
-from src.extractor import FastExtractor
-
-home = Path.home()
-index = MemoryIndex(Path('$INDEX_DIR') / 'index.db')
-sessions = discover_all(home)
-
-new = 0
-skipped = 0
-for session in sessions:
-    if index.is_source_processed(session.source, session.session_id):
-        skipped += 1
-        continue
-    entries = FastExtractor.extract(session)
-    for entry in entries:
-        index.upsert(entry)
-    index.mark_source_processed(session.source, session.session_id, len(session.messages))
-    new += 1
-
-stats = index.stats()
-print(f'  Scanned: {len(sessions)} sessions')
-print(f'  New: {new}')
-print(f'  Skipped: {skipped}')
-print(f'  Total entries: {stats[\"total_entries\"]}')
-if stats['by_source']:
-    for src, count in stats['by_source'].items():
-        print(f'    • {src}: {count}')
-index.close()
-" 2>&1 || echo -e "  ${YELLOW}!${RESET} Initial scan had issues (non-fatal — plugin still installed)"
+HERMES_HOME="$HERMES_HOME" PYTHONPATH="$REPO_DIR" "$PYTHON" -m memory_bridge scan --no-llm 2>&1 \
+    || echo -e "  ${YELLOW}!${RESET} Initial scan had issues (non-fatal — plugin still installed)"
 
 # ─── Done ──────────────────────────────────────────────────────────────────
 
@@ -252,42 +258,48 @@ echo -e "  ${BOLD}What it found:${RESET}"
 echo "  ───────────────────────────────────────────────"
 echo ""
 
-"$PYTHON" -c "
-import sys
-sys.path.insert(0, '$REPO_DIR')
-from pathlib import Path
-from src.indexer import MemoryIndex
-index = MemoryIndex(Path('$INDEX_DIR') / 'index.db')
-stats = index.stats()
-print(f'  🧠 {stats[\"total_entries\"]} memories consolidated')
-print(f'  📂 {stats[\"processed_sessions\"]} agent sessions processed')
-for src, count in sorted(stats.get('by_source', {}).items()):
-    print(f'  📝 {src}: {count} entries')
-index.close()
-" 2>&1 || true
+HERMES_HOME="$HERMES_HOME" PYTHONPATH="$REPO_DIR" "$PYTHON" -m memory_bridge stats 2>&1 || true
 
 echo ""
 echo -e "  ${BOLD}Next steps:${RESET}"
 echo "  ───────────────────────────────────────────────"
 echo ""
-echo "  1. Restart your Hermes session (the plugin loads on next start)"
-echo "  2. Type /memory_bridge_stats to see your memory summary"
-echo "  3. Type /memory_bridge_search \"your query\" to search"
-echo "  4. Run 'memory-bridge scan' to re-scan anytime"
+echo "  1. Make Memory Bridge your Hermes memory provider:"
+echo "       hermes memory setup          (pick antharmaya-bridge)"
+echo "     or set it in ${HERMES_HOME}/config.yaml:"
+echo "       memory:"
+echo "         provider: antharmaya-bridge"
+echo "  2. Start a new Hermes session. Hermes now has memory_bridge_* tools;"
+echo "     ask it things like \"search my memory bridge for razorpay\"."
+echo "  3. From a terminal:"
+if [ "$CLI_ON_PATH" -eq 1 ] || [ "$WROTE_WRAPPER" -eq 0 ]; then
+    MB_CMD="memory-bridge"
+else
+    MB_CMD="$WRAPPER"
+fi
+echo "       $MB_CMD scan              # re-scan any time"
+echo "       $MB_CMD search \"deploy\""
+echo "     With the provider active, the same commands also run as"
+echo "       hermes antharmaya-bridge <command>"
+echo "  4. Any MCP client can use the same index: memory-bridge mcp"
 echo ""
-echo -e "  ${BOLD}Optional: Auto-scan daily with cron${RESET}"
+echo -e "  ${BOLD}Optional: re-scan daily${RESET}"
 echo "  ───────────────────────────────────────────────"
 echo ""
-echo "  The bridge uses Hermes' own model for deep extraction"
-echo "  (no separate API key needed — it uses ctx.llm)."
+echo "    crontab:  0 6 * * * $( [ "$WROTE_WRAPPER" -eq 1 ] && echo "$WRAPPER" || echo memory-bridge ) scan --no-llm"
 echo ""
-echo "  To auto-scan for new agent conversations daily:"
+echo "  or let Hermes do it with its own model (deep extraction via ctx.llm):"
 echo ""
 echo "    hermes cron create \"0 6 * * *\" \\"
-echo "      --name \"memory-bridge-daily-scan\" \\"
-echo "      --prompt \"Run memory_bridge_scan use_llm=true to import new agent conversations\""
+echo "      \"Call memory_bridge_scan with use_llm=true to import new agent conversations\" \\"
+echo "      --name memory-bridge-daily-scan"
 echo ""
-echo ""
+if [ -e "$LEGACY_DIR" ] || [ -L "$LEGACY_DIR" ]; then
+    echo -e "  ${YELLOW}!${RESET} $LEGACY_DIR is left over from an older layout."
+    echo "    Hermes does not read it; remove it when you no longer need it."
+    echo ""
+fi
 echo -e "  ${CYAN}antharmaya.com/tools/memory-bridge${RESET}  |  ${CYAN}github.com/antharmaya/mem-bridge${RESET}"
 echo ""
-echo "  This is open-source software. Contributions welcome!"
+echo "  Memory Bridge is independent open-source software. Hermes Agent is built"
+echo "  by Nous Research; this plugin is not affiliated with or endorsed by them."

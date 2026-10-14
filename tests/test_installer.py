@@ -73,6 +73,12 @@ def install(origin, hermes_home, version="v0.5.0"):
 
 
 def repo_dir(hermes_home):
+    # Where Hermes (0.10+) looks for user-installed memory providers.
+    return hermes_home / "plugins" / "antharmaya-bridge"
+
+
+def legacy_dir(hermes_home):
+    # Where installers up to v0.5.0 put it; Hermes never scans this path.
     return hermes_home / "plugins" / "memory" / "antharmaya-bridge"
 
 
@@ -87,7 +93,7 @@ def backups(hermes_home):
 @pytest.fixture
 def home(tmp_path):
     h = tmp_path / "hermes"
-    (h / "plugins" / "memory").mkdir(parents=True)
+    (h / "plugins").mkdir(parents=True)
     return h
 
 
@@ -190,3 +196,115 @@ def test_honours_hermes_home(origin, tmp_path):
 
     assert install(origin, elsewhere).returncode == 0
     assert repo_dir(elsewhere).is_dir()
+
+
+def test_moves_a_legacy_install_to_where_hermes_looks(origin, home):
+    """v0.5.0 installed into plugins/memory/<name>/, which Hermes never reads."""
+    legacy_dir(home).parent.mkdir(parents=True)
+    git("clone", "-q", "--depth", "1", "--branch", "v0.4.0",
+        f"file://{origin}", str(legacy_dir(home)))
+
+    result = install(origin, home)
+
+    assert result.returncode == 0, result.stderr
+    assert installed_version(home) == "v0.5.0"
+    assert not legacy_dir(home).exists()
+    assert not legacy_dir(home).parent.exists(), "the emptied plugins/memory dir is tidied"
+    assert not backups(home)
+
+
+def test_leaves_a_legacy_symlink_alone(origin, home, tmp_path):
+    """A developer link at the old path is not ours to move."""
+    dev = tmp_path / "dev-checkout"
+    dev.mkdir()
+    legacy_dir(home).parent.mkdir(parents=True)
+    legacy_dir(home).symlink_to(dev)
+
+    result = install(origin, home)
+
+    assert result.returncode == 0, result.stderr
+    assert legacy_dir(home).is_symlink()
+    assert installed_version(home) == "v0.5.0"
+
+
+# ─── Full install against the real package ─────────────────────────────────
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(scope="module")
+def real_origin(tmp_path_factory):
+    """A bare repo holding this working tree, tagged, so the whole installer runs."""
+    root = tmp_path_factory.mktemp("real-origin")
+    work, bare = root / "work", root / "mem-bridge.git"
+    files = git("ls-files", "-co", "--exclude-standard", cwd=REPO_ROOT).splitlines()
+    for rel in files:
+        src_file = REPO_ROOT / rel
+        if not src_file.is_file():
+            continue  # deleted in the working tree but still in the index
+        dest = work / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_file, dest)
+    git("init", "-q", "-b", "main", str(work))
+    git("config", "user.email", "test@example.com", cwd=work)
+    git("config", "user.name", "test", cwd=work)
+    git("add", "-A", cwd=work)
+    git("commit", "-qm", "snapshot", cwd=work)
+    git("tag", "-a", "v9.9.9", "-m", "v9.9.9", cwd=work)
+    git("clone", "-q", "--bare", str(work), str(bare))
+    return bare
+
+
+def full_install(origin, fake_home, extra_env=None):
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("HERMES_HOME", "MEMORY_BRIDGE_BIN_DIR", "PYTHONPATH")}
+    env.update({
+        "HOME": str(fake_home),
+        "REPO_URL": f"file://{origin}",
+        "VERSION": "v9.9.9",
+        # Deliberately without ~/.local/bin, to exercise the PATH hint.
+        "PATH": os.pathsep.join(p for p in env["PATH"].split(os.pathsep)
+                                if ".local/bin" not in p),
+        **(extra_env or {}),
+    })
+    return subprocess.run(["bash", str(INSTALLER)], env=env,
+                          capture_output=True, text=True, timeout=300)
+
+
+def test_full_install_puts_a_working_cli_on_path(real_origin, tmp_path):
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    result = full_install(real_origin, fake_home)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    plugin = fake_home / ".hermes" / "plugins" / "antharmaya-bridge"
+    assert (plugin / "__init__.py").is_file()
+    wrapper = fake_home / ".local" / "bin" / "memory-bridge"
+    assert os.access(wrapper, os.X_OK)
+    assert "is not on your PATH" in result.stdout
+
+    from memory_bridge import __version__
+    ran = subprocess.run([str(wrapper), "--version"], capture_output=True, text=True,
+                         env={"HOME": str(fake_home), "PATH": os.environ["PATH"]})
+    assert ran.returncode == 0, ran.stderr
+    assert ran.stdout.strip() == f"memory-bridge {__version__}"
+
+    stats = subprocess.run([str(wrapper), "stats"], capture_output=True, text=True,
+                           env={"HOME": str(fake_home), "PATH": os.environ["PATH"]})
+    assert stats.returncode == 0, stats.stderr
+    assert (fake_home / ".hermes" / "antharmaya-memory" / "index.db").is_file()
+
+
+def test_full_install_never_replaces_a_foreign_memory_bridge(real_origin, tmp_path):
+    fake_home = tmp_path / "home"
+    bin_dir = fake_home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    foreign = bin_dir / "memory-bridge"
+    foreign.write_text("#!/bin/sh\necho pip-installed\n")
+
+    result = full_install(real_origin, fake_home)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert foreign.read_text() == "#!/bin/sh\necho pip-installed\n"
+    assert "not written by this installer" in result.stdout
