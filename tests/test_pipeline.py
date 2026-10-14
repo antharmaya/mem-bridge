@@ -23,14 +23,14 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.scanner import Session, Message, discover_all, get_available_scanners
-from src.scanners.base import discover_sessions, _validate_table_name
-from src.scanners.claude_code import _parse_claude_jsonl, detect_claude_format_version
-from src.scanners.aider import _parse_aider_markdown
-from src.scanners.codex import scan_codex
-from src.scanners.gemini import scan_gemini
-from src.indexer import MemoryIndex, MemoryEntry, SCHEMA_VERSION, SCHEMA_MIGRATIONS
-from src.extractor import (
+from memory_bridge.scanner import Session, Message, discover_all, get_available_scanners
+from memory_bridge.scanners.base import discover_sessions, _validate_table_name
+from memory_bridge.scanners.claude_code import _parse_claude_jsonl, detect_claude_format_version
+from memory_bridge.scanners.aider import _parse_aider_markdown
+from memory_bridge.scanners.codex import scan_codex
+from memory_bridge.scanners.gemini import scan_gemini
+from memory_bridge.indexer import MemoryIndex, MemoryEntry, SCHEMA_VERSION, SCHEMA_MIGRATIONS
+from memory_bridge.extractor import (
     FastExtractor, SmartExtractor, is_low_value_session,
     get_extraction_metrics, filter_sessions_for_llm, NOISE_PATTERNS,
     extract_structured_decisions,
@@ -799,7 +799,7 @@ class TestValidation:
 
     def test_llm_output_sanitized(self, index):
         """Malformed LLM facts must be coerced, never crash the scan."""
-        from src.extractor import _facts_to_entries
+        from memory_bridge.extractor import _facts_to_entries
 
         session = Session(source="codex", session_id="s-llm", messages=[])
         facts = [
@@ -858,7 +858,7 @@ class TestIndexHelpers:
 
     def test_vector_encoding(self):
         """Vector encoding/decoding roundtrip."""
-        from src.indexer import encode_vector, _decode_vector
+        from memory_bridge.indexer import encode_vector, _decode_vector
         vec = [0.1, 0.2, 0.3, 0.4, 0.5]
         encoded = encode_vector(vec)
         decoded = _decode_vector(encoded)
@@ -866,18 +866,18 @@ class TestIndexHelpers:
 
     def test_cosine_similarity_identical(self):
         """Cosine similarity of identical vectors should be 1.0."""
-        from src.indexer import _cosine_similarity
+        from memory_bridge.indexer import _cosine_similarity
         vec = [1.0, 2.0, 3.0]
         assert _cosine_similarity(vec, vec) == pytest.approx(1.0)
 
     def test_cosine_similarity_orthogonal(self):
         """Cosine similarity of orthogonal vectors should be 0.0."""
-        from src.indexer import _cosine_similarity
+        from memory_bridge.indexer import _cosine_similarity
         assert _cosine_similarity([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
 
     def test_cosine_similarity_zero_vector(self):
         """Cosine similarity with zero vector should be 0.0."""
-        from src.indexer import _cosine_similarity
+        from memory_bridge.indexer import _cosine_similarity
         assert _cosine_similarity([0.0, 0.0], [1.0, 1.0]) == pytest.approx(0.0)
 
 
@@ -890,7 +890,7 @@ class TestExtractionMetrics:
 
     def test_metrics_start_empty(self):
         """Metrics should start with zeros."""
-        from src.extractor import _metrics
+        from memory_bridge.extractor import _metrics
         _metrics.reset()
         q = _metrics.summary()
         assert q["sessions_processed"] == 0
@@ -898,7 +898,7 @@ class TestExtractionMetrics:
 
     def test_metrics_after_extraction(self, sample_session):
         """Metrics should be populated after extraction."""
-        from src.extractor import _metrics
+        from memory_bridge.extractor import _metrics
         _metrics.reset()
 
         extractor = SmartExtractor()
@@ -963,7 +963,7 @@ class TestFormatMetadata:
 
     def test_format_version_in_metadata(self, tmp_path):
         """Claude Code sessions should have format_version in metadata."""
-        from src.scanners.claude_code import scan_claude_code
+        from memory_bridge.scanners.claude_code import scan_claude_code
 
         # Create a mock project with a v2 session
         projects_dir = tmp_path / ".claude" / "projects" / "testproj"
@@ -1050,7 +1050,7 @@ class TestRecall:
 
     def test_query_parsing(self):
         from datetime import datetime, timezone
-        from src.recall_query import parse_recall_query
+        from memory_bridge.recall_query import parse_recall_query
         now = datetime(2026, 6, 22, tzinfo=timezone.utc)
         p = parse_recall_query("what did i do with claude code last month 15th to 16th?", now=now)
         assert p["agent"] == "claude-code"
@@ -1061,7 +1061,7 @@ class TestRecall:
         assert parse_recall_query("show me the postgres decision")["is_recall"] is False
 
     def test_session_timestamp_uses_conversation_date(self):
-        from src.extractor import session_timestamp
+        from memory_bridge.extractor import session_timestamp
         s = Session(source="claude-code", session_id="s", messages=[
             Message(role="user", content="hi", timestamp="2026-05-15T10:00:00Z"),
             Message(role="assistant", content="yo", timestamp="2026-05-16T11:00:00Z"),
@@ -1138,7 +1138,7 @@ class TestMcpServer:
     """The stdio JSON-RPC frontend any MCP client (Cursor, Claude Desktop) can use."""
 
     def test_initialize_handshake(self):
-        from src.mcp_server import handle_message
+        from memory_bridge.mcp_server import handle_message
         r = handle_message({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                             "params": {"protocolVersion": "2025-06-18"}})
         assert r["id"] == 1
@@ -1147,22 +1147,22 @@ class TestMcpServer:
         assert "tools" in r["result"]["capabilities"]
 
     def test_initialized_notification_has_no_response(self):
-        from src.mcp_server import handle_message
+        from memory_bridge.mcp_server import handle_message
         assert handle_message({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
 
     def test_tools_list(self):
-        from src.mcp_server import handle_message
+        from memory_bridge.mcp_server import handle_message
         r = handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         names = {t["name"] for t in r["result"]["tools"]}
         assert {"search_memory", "recall", "list_decisions", "memory_stats"}.issubset(names)
 
     def test_tools_call_search(self, index):
-        from src.mcp_server import handle_message
+        from memory_bridge.mcp_server import handle_message
         index.upsert(MemoryEntry(content="Decided to use Cloudflare R2 for object storage",
                                  category="decision", source_agent="claude-code",
                                  source_session="s", importance=0.8))
         # inject the temp index via execute_tool through handle_message's tools/call
-        import src.mcp_server as mcp
+        import memory_bridge.mcp_server as mcp
         r = mcp.handle_message(
             {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
              "params": {"name": "search_memory", "arguments": {"query": "cloudflare"}}},
@@ -1172,7 +1172,7 @@ class TestMcpServer:
         assert "Cloudflare" in r["result"]["content"][0]["text"]
 
     def test_unknown_method_errors(self):
-        from src.mcp_server import handle_message
+        from memory_bridge.mcp_server import handle_message
         r = handle_message({"jsonrpc": "2.0", "id": 9, "method": "bogus/method"})
         assert r["error"]["code"] == -32601
 
@@ -1185,7 +1185,7 @@ class TestBrainGraph:
     """Entity extraction + graph build + associative recall."""
 
     def test_entity_extraction(self):
-        from src.entities import extract_entities, clean_project_name
+        from memory_bridge.entities import extract_entities, clean_project_name
         ents = dict((d.lower(), k) for d, k in extract_entities(
             "We will deploy PhotoSelect on Cloudflare with Postgres and Redis",
             project="-home-driftr-Desktop-bolting-photoselect"))
@@ -1196,7 +1196,7 @@ class TestBrainGraph:
         assert clean_project_name("-home-driftr-Desktop-bolting-photoselect").endswith("photoselect")
 
     def test_graph_build_and_associative_recall(self, index):
-        from src.entities import extract_entities
+        from memory_bridge.entities import extract_entities
         rows = [
             ("Decided to use Cloudflare R2 for PhotoSelect storage", "decision"),
             ("PhotoSelect backend runs Postgres on port 5433", "fact"),
@@ -1217,7 +1217,7 @@ class TestBrainGraph:
         assert not any("goose recipe" in h.content for h in hits)
 
     def test_top_entities(self, index):
-        from src.entities import extract_entities
+        from memory_bridge.entities import extract_entities
         for _ in range(3):
             eid = index.upsert(MemoryEntry(content="docker and docker compose", category="fact",
                                            source_agent="x", source_session="s",
@@ -1235,7 +1235,7 @@ class TestSemanticFusion:
     """Vector storage + cosine search + RRF, all without requiring model2vec."""
 
     def test_embeddings_backend_optional(self):
-        from src import embeddings
+        from memory_bridge import embeddings
         # In CI model2vec isn't installed → backend disabled, no crash.
         assert embeddings.embed_one("anything") is None or isinstance(embeddings.embed_one("anything"), list)
 
@@ -1273,7 +1273,7 @@ class TestBriefAndReflection:
     """Always-fresh briefings computed live; reflection that never mutates memories."""
 
     def _seed(self, index):
-        from src.entities import extract_entities
+        from memory_bridge.entities import extract_entities
         for content, cat in [
             ("Decided to use Cloudflare R2 for PhotoSelect storage", "decision"),
             ("PhotoSelect backend runs Postgres on port 5433", "fact"),
@@ -1290,14 +1290,14 @@ class TestBriefAndReflection:
         assert b and b["scope"] == "PhotoSelect"
         assert b["entry_count"] >= 3
         assert "cloudflare" in [c.lower() for c in b["connected_to"]] or "postgres" in [c.lower() for c in b["connected_to"]]
-        from src.indexer import format_brief
+        from memory_bridge.indexer import format_brief
         text = format_brief(b)
         assert "PhotoSelect" in text and "memories" in text
 
     def test_brief_reflects_new_facts_without_staleness(self, index):
         self._seed(index)
         before = index.brief("photoselect")["entry_count"]
-        from src.entities import extract_entities
+        from memory_bridge.entities import extract_entities
         eid = index.upsert(MemoryEntry(content="PhotoSelect now also uses Redis for queues", category="fact",
                                        source_agent="codex", source_session="sess-ps2", importance=0.6))
         index.index_entities_for_entry(eid, extract_entities("PhotoSelect now also uses Redis for queues"), "")

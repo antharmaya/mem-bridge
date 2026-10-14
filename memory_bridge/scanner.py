@@ -6,11 +6,11 @@ Cursor, Goose, Agent Linux Control, and any future agent.
 
 Each scanner returns a list of Session objects with canonicalized messages.
 
-This module now re-exports from src/scanners/ for backward compatibility.
+This module now re-exports from memory_bridge/scanners/ for backward compatibility.
 """
 from __future__ import annotations
 
-from src.scanners import (
+from .scanners import (
     Message,
     Session,
     _validate_table_name,

@@ -14,7 +14,7 @@ Usage:
   memory-bridge verify <id> good|bad|unset   Record how a decision turned out
   memory-bridge reflect           Surface failed decisions as lessons (non-destructive)
   memory-bridge mcp               Run the MCP server (stdio) for any MCP client
-  memory-bridge consolidate       Deep LLM consolidation of all unscanned sessions
+  memory-bridge embed             Backfill semantic embeddings (needs memory-bridge[semantic])
   memory-bridge repair            Repair corrupted index
   memory-bridge export <file>     Export index to tar.gz
   memory-bridge import <file>     Import index from tar.gz
@@ -26,17 +26,16 @@ import os
 import sys
 from pathlib import Path
 
-# Add src to path if running from repo
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from . import __version__
 
 
 def cmd_scan(args):
     """Scan for new agent conversations and extract facts."""
-    from src.scanner import discover_all
-    from src.indexer import MemoryIndex
-    from src.extractor import FastExtractor, SmartExtractor, extract_structured_decisions
-    from src.entities import extract_entities
-    from src.config import get_default_db_path
+    from .scanner import discover_all
+    from .indexer import MemoryIndex
+    from .extractor import FastExtractor, SmartExtractor, extract_structured_decisions
+    from .entities import extract_entities
+    from .config import get_default_db_path
 
     home = Path(args.home) if args.home else Path.home()
     db_path = get_default_db_path()
@@ -57,7 +56,7 @@ def cmd_scan(args):
 
     if args.verbose:
         # Show per-scanner diagnostics
-        from src.scanner import scan_stats
+        from .scanner import scan_stats
         stats = scan_stats(home)
         print()
         print("Scanner diagnostics:")
@@ -121,7 +120,7 @@ def cmd_scan(args):
             total_entries += len(entries)
 
     # Optional semantic backfill (no-op if model2vec isn't installed).
-    from src import embeddings as _emb
+    from . import embeddings as _emb
     if _emb.available():
         n = index.backfill_embeddings(_emb.embed)
         if n:
@@ -147,7 +146,7 @@ def cmd_scan(args):
     # Show quality metrics if extraction was used
     if use_llm and extractor:
         try:
-            from src.extractor import get_extraction_metrics
+            from .extractor import get_extraction_metrics
             q = get_extraction_metrics()
             print()
             print("Extraction quality this session:")
@@ -163,8 +162,8 @@ def cmd_scan(args):
 
 def cmd_search(args):
     """Search the unified memory index."""
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
 
@@ -194,9 +193,9 @@ def cmd_search(args):
 
 def cmd_stats(args):
     """Show memory bridge statistics."""
-    from src.indexer import MemoryIndex
-    from src.scanner import get_available_scanners
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .scanner import get_available_scanners
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
 
@@ -241,8 +240,8 @@ def cmd_stats(args):
 
 def cmd_decisions(args):
     """List structured decisions consolidated from agent conversations."""
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
     if not db_path.exists():
@@ -275,9 +274,9 @@ def cmd_decisions(args):
 
 def cmd_recall(args):
     """Scoped recall: 'what did I do with <agent> on <date>'."""
-    from src.indexer import MemoryIndex
-    from src.recall_query import parse_recall_query
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .recall_query import parse_recall_query
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
     if not db_path.exists():
@@ -316,7 +315,7 @@ def cmd_recall(args):
 
 def cmd_quality(args):
     """Show extraction quality metrics."""
-    from src.extractor import get_extraction_metrics
+    from .extractor import get_extraction_metrics
 
     q = get_extraction_metrics()
     if q["sessions_processed"] == 0:
@@ -348,8 +347,8 @@ def cmd_quality(args):
 
 def cmd_repair(args):
     """Repair a corrupted index."""
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
 
@@ -371,8 +370,8 @@ def cmd_repair(args):
 
 def cmd_export(args):
     """Export the index to a tar.gz file."""
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
 
@@ -391,8 +390,8 @@ def cmd_export(args):
 
 def cmd_import(args):
     """Import an index from a tar.gz file."""
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
 
     import_path = args.file
     if not Path(import_path).exists():
@@ -418,8 +417,8 @@ def cmd_import(args):
 
 def cmd_vacuum(args):
     """Vacuum the index to reclaim space."""
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
 
@@ -440,8 +439,8 @@ def cmd_vacuum(args):
 
 def cmd_brain(args):
     """Explore the memory brain — top entities, or one entity's neighborhood."""
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
     if not db_path.exists():
@@ -467,8 +466,8 @@ def cmd_brain(args):
 
 def cmd_brief(args):
     """Always-fresh briefing for a project/entity (deterministic, traceable)."""
-    from src.indexer import MemoryIndex, format_brief
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex, format_brief
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
     if not db_path.exists():
@@ -481,8 +480,8 @@ def cmd_brief(args):
 
 def cmd_verify(args):
     """Mark how a past decision turned out — the loop's 'verify' step."""
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
     if not db_path.exists():
@@ -507,8 +506,8 @@ def cmd_verify(args):
 
 def cmd_reflect(args):
     """Surface failed/contradicted decisions as new lesson entries (non-destructive)."""
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
     if not db_path.exists():
@@ -522,9 +521,9 @@ def cmd_reflect(args):
 
 def cmd_embed(args):
     """Backfill semantic embeddings for entries that lack them (optional feature)."""
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
-    from src import embeddings as _emb
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
+    from . import embeddings as _emb
 
     if not _emb.available():
         print("Semantic embeddings are not installed. Enable with:")
@@ -543,15 +542,18 @@ def cmd_embed(args):
 
 def cmd_mcp(args):
     """Run the MCP server (stdio) so any MCP client can use the unified index."""
-    from src.mcp_server import serve
+    from .mcp_server import serve
     serve()
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Antharmaya Memory Bridge — Unified Agent Memory",
-    )
-    sub = parser.add_subparsers(dest="command")
+def add_commands(parser, dest="command"):
+    """Attach every subcommand to *parser*.
+
+    Shared by the standalone ``memory-bridge`` entry point and the Hermes
+    plugin's ``hermes antharmaya-bridge`` subcommand. *dest* is configurable
+    because Hermes already uses ``args.command`` for its own top level.
+    """
+    sub = parser.add_subparsers(dest=dest)
 
     # mcp (framework-agnostic frontend)
     mcp = sub.add_parser("mcp", help="Run the MCP server (stdio) for any MCP client")
@@ -635,12 +637,30 @@ def main():
     vacuum = sub.add_parser("vacuum", help="Vacuum index to reclaim space")
     vacuum.set_defaults(func=cmd_vacuum)
 
-    args = parser.parse_args()
+    return sub
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="memory-bridge",
+        description="Antharmaya Memory Bridge — Unified Agent Memory",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"memory-bridge {__version__}"
+    )
+    add_commands(parser)
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if not args.command:
         parser.print_help()
-        return
+        return 0
 
     args.func(args)
+    return 0
 
 
 if __name__ == "__main__":

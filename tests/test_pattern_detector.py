@@ -4,7 +4,7 @@ import tempfile
 
 import pytest
 
-from src.extractors.pattern_detector import PatternDetector, should_extract
+from memory_bridge.extractors.pattern_detector import PatternDetector, should_extract
 
 
 class TestPatternDetector:

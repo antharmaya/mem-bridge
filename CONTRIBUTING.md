@@ -11,7 +11,7 @@ Scanners are self-contained modules that auto-register via the
 ### 1. Create the scanner file
 
 ```python
-# src/scanners/my_agent.py
+# memory_bridge/scanners/my_agent.py
 """Scanner for MyAgent history files."""
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def scan_my_agent(home: Path) -> Iterator[Session]:
 
 ### 2. Register the scanner
 
-Add an import in `src/scanners/__init__.py`:
+Add an import in `memory_bridge/scanners/__init__.py`:
 
 ```python
 from . import (
@@ -63,7 +63,7 @@ from . import (
 ### 3. Test it
 
 ```bash
-python3 -c "from src.scanner import get_available_scanners; print(get_available_scanners())"
+python3 -c "from memory_bridge.scanner import get_available_scanners; print(get_available_scanners())"
 # Verify 'my-agent' appears in the list
 ```
 

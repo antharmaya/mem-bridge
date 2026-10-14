@@ -107,7 +107,8 @@ class AntharmayaMemoryProvider(MemoryProvider):
             return (
                 "\n## Antharmaya Memory Bridge\n"
                 "Memory bridge is active but has no consolidated entries yet. "
-                "Run `hermes memory-bridge scan` to import your agent histories.\n"
+                "Call the memory_bridge_scan tool (or run `memory-bridge scan` in a "
+                "terminal) to import your agent histories.\n"
             )
 
         by_source = stats.get("by_source", {})

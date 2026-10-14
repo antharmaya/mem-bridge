@@ -7,7 +7,7 @@ JSON-RPC 2.0 over stdio, so Claude Desktop, Cursor, Codex, Windsurf — any MCP
 client — can search, recall, and review the same local index. No SDK, no extra
 dependency; stdlib only, true to the local-first identity.
 
-Run:  memory-bridge mcp   (or: python3 -m src.mcp_server)
+Run:  memory-bridge mcp   (or: python3 -m memory_bridge.mcp_server)
 
 Client config (e.g. Claude Desktop / Cursor mcpServers):
     {
@@ -23,9 +23,11 @@ import json
 import sys
 from typing import Any, Optional
 
+from . import __version__
+
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "antharmaya-memory-bridge"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = __version__
 
 # ─── Tool catalogue (agent-neutral names) ────────────────────────────────
 
@@ -89,8 +91,8 @@ TOOLS = [
 # ─── Index access + tool execution ───────────────────────────────────────
 
 def _open_index():
-    from src.indexer import MemoryIndex
-    from src.config import get_default_db_path
+    from .indexer import MemoryIndex
+    from .config import get_default_db_path
 
     db_path = get_default_db_path()
     if not db_path.exists():
@@ -118,7 +120,7 @@ def execute_tool(name: str, args: dict, index=None) -> str:
             )
 
         if name == "recall":
-            from src.recall_query import parse_recall_query
+            from .recall_query import parse_recall_query
             p = parse_recall_query(args.get("question", ""))
             entries = index.recall(
                 agent=p["agent"], since=p["since"], until=p["until"],

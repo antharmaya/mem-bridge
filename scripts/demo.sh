@@ -125,10 +125,10 @@ export MEMORY_BRIDGE_DB_PATH="${DEMO_DIR}/index.db"
 python3 -c "
 import sys
 sys.path.insert(0, '${SCRIPT_DIR}')
-from src.scanner import discover_all
-from src.indexer import MemoryIndex
-from src.extractor import FastExtractor
-from src.config import get_default_db_path
+from memory_bridge.scanner import discover_all
+from memory_bridge.indexer import MemoryIndex
+from memory_bridge.extractor import FastExtractor
+from memory_bridge.config import get_default_db_path
 from pathlib import Path
 
 # Override db path

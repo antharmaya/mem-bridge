@@ -6,7 +6,7 @@ on disk and yields Session objects. Scanners are auto-registered via the
 @register_scanner decorator.
 
 To add a new scanner:
-    1. Create a new file in src/scanners/
+    1. Create a new file in memory_bridge/scanners/
     2. Decorate your scanner function with @register_scanner("agent-name")
     3. Import it in this __init__.py
     4. Submit a PR

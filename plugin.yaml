@@ -1,6 +1,7 @@
 name: antharmaya-memory-bridge
-version: "0.5.0"
-description: "Unified agent memory — gives Hermes photographic memory of every AI conversation you've ever had"
+# Keep in step with memory_bridge/__init__.py (__version__); a test enforces it.
+version: "0.6.0"
+description: "Memory Bridge — an independent memory provider that gives Hermes Agent recall of every AI agent conversation on this machine. Not affiliated with or endorsed by Nous Research."
 author: "Antharmaya Labs"
 license: MIT
 platforms: [linux, macos, windows]
@@ -12,3 +13,6 @@ metadata:
     tags: [memory, agent-history, consolidation, claude-code, codex, gemini]
     category: Memory & Context
     min_hermes_version: "0.16.0"
+    # Install location: $HERMES_HOME/plugins/antharmaya-bridge/
+    # Activate:         memory.provider: antharmaya-bridge  (or `hermes memory setup`)
+    # CLI (when active): hermes antharmaya-bridge <command>
