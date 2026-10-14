@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.6.0 (2026-10-14) — The package is `memory_bridge`, and the Hermes plugin actually loads
+
+**Breaking-ish: the import package is renamed `src` → `memory_bridge`.**
+The v0.5.0 wheel installed a top-level package literally named `src`, which
+collides with any other project that ships one.
+
+- Imports are now `from memory_bridge.scanner import discover_all`, etc. The
+  console script is `memory-bridge = memory_bridge.cli:main`; `python -m
+  memory_bridge` does the same.
+- **Compatibility shim, this release only:** `import src` / `from src.x import y`
+  still work in 0.6.x and emit a `DeprecationWarning`. Every `src.<name>` is the
+  *same module object* as `memory_bridge.<name>`. The shim is removed in 0.7.0.
+- **One version number.** `memory_bridge.__version__` is the single source:
+  pyproject reads it at build time; the CLI (`memory-bridge --version`), the MCP
+  server's `serverInfo` and the plugin entry point import it. Before this, the
+  package said 0.5.0, `__init__` said 0.1.1 and the MCP server said 0.3.0. A test
+  keeps plugin.yaml, the installer pin and this changelog in step.
+
+**Hermes plugin fixes (verified against Hermes Agent v0.19.0):**
+
+- The installer put the plugin in `$HERMES_HOME/plugins/memory/antharmaya-bridge/`,
+  a path Hermes never scans; and even at the right path the entry point's
+  absolute `from src.provider import register` failed (`No module named 'src'`)
+  because Hermes does not put the plugin directory on `sys.path`. The provider
+  never loaded. It now installs to `$HERMES_HOME/plugins/antharmaya-bridge/`,
+  uses relative imports, and moves a v0.5.x install from the old path.
+- `hermes memory-bridge …` never existed. While Memory Bridge is the active
+  provider, the CLI is now available as `hermes antharmaya-bridge <command>`
+  (Hermes names a memory plugin's CLI after its directory).
+- The README described `/memory_bridge_*` as slash commands; they are agent tools.
+
+**Installer:** pins v0.6.0; puts a `memory-bridge` command in `~/.local/bin`
+(`MEMORY_BRIDGE_BIN_DIR` to override; never replaces one it did not write);
+picks the first Python that is 3.11+ instead of the first one found; the
+initial scan and summary run the real CLI; next steps describe commands that
+exist (the old `hermes cron create --prompt` flag did not).
+
+**Packaging and release:** PEP 639 licence metadata, classifiers, keywords and
+Source/Issues/Changelog URLs; schema SQL and docs shipped as package data. The
+release workflow publishes with PyPI Trusted Publishing (no API token), checks
+the tag against the package version and smoke-tests the built wheel in a fresh
+venv before publishing. CI runs on Python 3.11–3.14 with current action majors.
+Python 3.10 (end of life this month) was already unsupported; the floor stays 3.11.
+
+- Tests: 117 → 132 (Hermes-loader simulation, version consistency, `src` shim,
+  MCP startup, legacy-path migration, full install with the PATH wrapper).
+
 ## v0.5.0 (2026-06-23) — The decision loop closes (Council ⨉ Bridge, self-correcting)
 
 Decide → Remember → Verify → Learn, end to end. The system now improves from its

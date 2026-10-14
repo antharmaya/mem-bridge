@@ -134,7 +134,7 @@ with a frictionless UX becomes the default. After that, the category calcifies.
 | 11 | **Schema versioning + auto-migration** — future-proof | ❌ Nobody does this |
 | 12 | **Export/import protocol** — machine migration | ❌ Nobody does this |
 | 13 | **Format version detection** — graceful v1/v2/v3+ handling | ❌ Nobody does this |
-| 14 | **63 automated tests** — every scanner tested with synthetic data | ✅ Shared by some |
+| 14 | **automated pytest suite** — every scanner tested with synthetic data | ✅ Shared by some |
 
 ### Cons (All Closed in v0.1.1)
 
@@ -153,7 +153,7 @@ with a frictionless UX becomes the default. After that, the category calcifies.
 | 11 | No permission awareness | `_is_path_accessible()`, PermissionError handling | ✅ Closed |
 | 12 | No streaming discovery | `discover_sessions()` generator | ✅ Closed |
 | 13 | No batch processing | `--batch-size N`, progress reporting | ✅ Closed |
-| 14 | Only 5 tests | 63 tests covering all scanners, edge cases, and features | ✅ Closed |
+| 14 | Only 5 tests | A pytest suite covering all scanners, edge cases, and features | ✅ Closed |
 
 ## The Fold Improvement (Final)
 

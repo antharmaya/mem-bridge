@@ -113,69 +113,101 @@ local index. No SDK, no extra dependency.
 
 Exposes four tools to the client: `search_memory`, `recall` (time/agent-scoped),
 `list_decisions`, and `memory_stats`. Run it directly with `memory-bridge mcp`.
+The `memory-bridge` command comes from either install method below; if your MCP
+client does not inherit your shell's `PATH`, give it the full path
+(`~/.local/bin/memory-bridge` after the curl install).
 
 ---
 
 ## Usage
 
-### In Hermes (after install)
+### In Hermes
 
-```
-/memory_bridge_stats                    # See what's been consolidated
-/memory_bridge_search "razorpay auth"   # Search all agent memories
-/memory_bridge_recall "what did I do with Claude Code last month"  # Agent + time-scoped recall
-/memory_bridge_brain "photoselect"      # Explore the entity graph / associative recall
-/memory_bridge_brief "photoselect"      # Always-fresh briefing (decisions, outcomes, files)
-/memory_bridge_decisions                # Review structured decisions + outcomes
-/memory_bridge_scan                     # Re-scan for new conversations
-```
+Once Memory Bridge is the active memory provider (see [Activation](#activation)),
+Hermes injects relevant memories into every turn on its own, and gains these
+tools, which it calls when you ask in plain language — for example *"search my
+memory bridge for razorpay auth"* or *"what did I do with Claude Code last month?"*:
 
-Or use the CLI:
+| Tool | What it does |
+|------|--------------|
+| `memory_bridge_search` | Full-text search across every agent's history |
+| `memory_bridge_recall` | Agent- and time-scoped recall ("what did I do with Codex last week") |
+| `memory_bridge_brain` | Entity graph: what is connected to a project, tool or file |
+| `memory_bridge_brief` | Always-fresh briefing for a project or entity |
+| `memory_bridge_decisions` | Structured decisions and their outcomes |
+| `memory_bridge_verify_decision` | Record how a decision turned out (a bad outcome becomes a lesson) |
+| `memory_bridge_scan` | Import new agent conversations (deep extraction via Hermes' own model) |
+| `memory_bridge_stats` / `memory_bridge_quality` | Index and extraction statistics |
 
-```bash
-hermes memory-bridge scan               # Scan for new agent histories
-hermes memory-bridge search "deploy"    # Search your unified memory
-hermes memory-bridge recall "what did I do with codex last week"  # Time/agent recall
-hermes memory-bridge brain photoselect  # Entity graph: what's connected to what
-hermes memory-bridge brief photoselect  # Always-fresh briefing for a project/entity
-hermes memory-bridge verify 7 bad "prod data got corrupted"  # Record an outcome → becomes a lesson
-hermes memory-bridge reflect            # Surface failed decisions as lessons
-hermes memory-bridge decisions          # List structured decisions + outcomes
-hermes memory-bridge stats              # Show memory statistics
-```
+These are agent tools, not slash commands.
 
-### Standalone (without Hermes)
+### From a terminal
 
 ```bash
-python3 -c "
-from src.scanner import discover_all
-from src.indexer import MemoryIndex
+memory-bridge scan                       # Scan for new agent histories
+memory-bridge search "deploy"            # Search your unified memory
+memory-bridge recall "what did I do with codex last week"   # Time/agent recall
+memory-bridge brain photoselect          # Entity graph: what's connected to what
+memory-bridge brief photoselect          # Always-fresh briefing for a project/entity
+memory-bridge verify 7 bad "prod data got corrupted"         # Record an outcome → becomes a lesson
+memory-bridge reflect                    # Surface failed decisions as lessons
+memory-bridge decisions                  # List structured decisions + outcomes
+memory-bridge stats                      # Show memory statistics
+memory-bridge mcp                        # Run the MCP server on stdio
+memory-bridge --help                     # Everything else (export, import, repair, vacuum, embed)
+```
+
+While Memory Bridge is the active Hermes memory provider, the same commands are
+also available as `hermes antharmaya-bridge <command>` (Hermes names a memory
+plugin's CLI after the plugin, and only adds it for the active provider).
+
+### From Python
+
+```python
 from pathlib import Path
+from memory_bridge.scanner import discover_all
+from memory_bridge.indexer import MemoryIndex
 
-index = MemoryIndex(Path.home() / '.hermes' / 'antharmaya-memory' / 'index.db')
+index = MemoryIndex(Path.home() / ".hermes" / "antharmaya-memory" / "index.db")
 sessions = discover_all()
-print(f'Found {len(sessions)} agent sessions')
-stats = index.stats()
-print(stats)
-"
+print(f"Found {len(sessions)} agent sessions")
+print(index.stats())
 ```
+
+The import package was called `src` up to v0.5.0. `import src` still works in
+v0.6.x with a `DeprecationWarning` and is removed in v0.7.0.
 
 ---
 
 ## Installation
 
-### Method 1: Curl (Recommended)
+### Method 1: Curl (Recommended for Hermes)
 ```bash
 curl -fsSL https://antharmaya.com/memory-bridge/install.sh | bash
 ```
-Clones into `~/.hermes/plugins/memory/antharmaya-bridge/`, installs deps, runs initial scan.
+Clones the tagged release into `~/.hermes/plugins/antharmaya-bridge/` (or
+`$HERMES_HOME/plugins/antharmaya-bridge/`), puts a `memory-bridge` command in
+`~/.local/bin` (override with `MEMORY_BRIDGE_BIN_DIR`; it never replaces a
+`memory-bridge` it did not write), and runs an initial rules-based scan.
+Re-running it upgrades in place. An install made by the v0.5.x installer under
+`~/.hermes/plugins/memory/` — a directory Hermes does not scan — is moved to the
+right place.
 
 ### Method 2: Manual (git clone)
 ```bash
-git clone https://github.com/antharmaya/mem-bridge.git \
-  ~/.hermes/plugins/memory/antharmaya-bridge
+git clone --branch v0.6.0 https://github.com/antharmaya/mem-bridge.git \
+  ~/.hermes/plugins/antharmaya-bridge
 ```
-Memory providers must live in `~/.hermes/plugins/memory/<name>/` — this is the Hermes convention for provider discovery.
+Hermes discovers user-installed memory providers in `~/.hermes/plugins/<name>/`.
+The directory name, `antharmaya-bridge`, is the provider name you activate.
+
+### Method 3: pip (CLI and MCP server, no Hermes)
+```bash
+pip install memory-bridge                 # or: pipx install memory-bridge
+pip install "memory-bridge[semantic]"     # optional local semantic search
+```
+This gives you the `memory-bridge` command and the MCP server. It does not
+install the Hermes plugin; use Method 1 or 2 for that.
 
 ### Activation
 
@@ -194,14 +226,14 @@ memory:
   provider: antharmaya-bridge
 ```
 
-Then restart Hermes. The plugin loads automatically on next session. Verify with:
-```
-/memory_bridge_stats
+Then start a new Hermes session; the provider loads at startup. Check it with:
+```bash
+hermes memory status        # Provider: antharmaya-bridge · Plugin: installed ✓
 ```
 
 ### Requirements
 - Python 3.11+
-- Hermes Agent 0.16.0+
+- Hermes Agent 0.16.0+ for the plugin (tested on v0.19.0); not needed for the CLI or MCP server
 - 10MB disk space (SQLite index)
 - No external services. No API keys. No cloud. No telemetry.
 
@@ -231,29 +263,34 @@ export OPENROUTER_API_KEY="sk-or-v1-..."       # OpenRouter
 ## Architecture
 
 ```
-antharmaya-memory-bridge/
-├── src/
-│   ├── scanner.py       # Agent history discovery (re-exports from scanners/)
-│   ├── scanners/        # Individual agent scanners (9 agents)
-│   │   ├── base.py      # Session/Message types, scanner registry
-│   │   ├── claude_code.py, codex.py, gemini.py, ...
-│   ├── extractor.py     # Rules-based + LLM fact extraction
-│   ├── indexer.py       # SQLite+FTS5 storage engine
-│   ├── provider.py      # Hermes MemoryProvider plugin
-│   └── cli.py           # Standalone CLI
+mem-bridge/
+├── __init__.py           # Hermes plugin entry point: register(ctx)
+├── cli.py                # Hermes CLI hook: `hermes antharmaya-bridge <command>`
 ├── plugin.yaml           # Hermes plugin manifest
+├── memory_bridge/        # The Python package (`pip install memory-bridge`)
+│   ├── scanner.py        # Agent history discovery (re-exports from scanners/)
+│   ├── scanners/         # Individual agent scanners (9 agents)
+│   │   ├── base.py       # Session/Message types, scanner registry
+│   │   └── claude_code.py, codex.py, gemini.py, aider.py, ...
+│   ├── extractor.py      # Rules-based + LLM fact extraction
+│   ├── indexer.py        # SQLite+FTS5 storage engine, entity graph, briefs
+│   ├── provider.py       # Hermes MemoryProvider
+│   ├── mcp_server.py     # Zero-dependency MCP server (stdio)
+│   └── cli.py            # The `memory-bridge` command
+├── src/                  # Deprecated alias for memory_bridge (removed in 0.7.0)
 ├── install.sh            # One-line curl installer
 └── README.md
+```
 
 ### Adding a new agent scanner
 
-1. Create `src/scanners/my_agent.py` with a `@register_scanner("agent-name")` function
-2. Import it in `src/scanners/__init__.py`
+1. Create `memory_bridge/scanners/my_agent.py` with a `@register_scanner("agent-name")` function
+2. Import it in `memory_bridge/scanners/__init__.py`
 3. Submit a PR
 
 Example:
 ```python
-# src/scanners/my_agent.py
+# memory_bridge/scanners/my_agent.py
 from .base import Message, Session, register_scanner
 
 @register_scanner("my-agent")
@@ -286,7 +323,7 @@ FTS5 queries are sub-millisecond even with 100K+ entries. The index file grows ~
 A: No. Everything runs locally. The only optional network call is LLM extraction if you provide an API key.
 
 **Q: Can I use this without Hermes?**
-A: Yes. The scanner and indexer work standalone. Use the Python API directly.
+A: Yes. `pip install memory-bridge` gives you the `memory-bridge` CLI, the MCP server and the Python API.
 
 **Q: What if an agent changes its history format?**
 A: Scanners are modular. If a format breaks, only that scanner fails — everything else keeps working. File an issue and we'll fix it.
@@ -304,10 +341,13 @@ A: Hermes memory only knows what happens IN Hermes sessions. Memory Bridge knows
 - [x] Core scanner + indexer
 - [x] Hermes MemoryProvider plugin
 - [x] One-line curl installer
+- [x] Zero-dependency MCP server for any MCP client (v0.3.0)
+- [x] Optional local semantic search + hybrid retrieval, `memory-bridge[semantic]` (v0.4.1)
+- [x] Entity graph, always-fresh briefings, decision → outcome → lesson loop (v0.4.0–v0.5.0)
+- [x] Aider and Continue scanners
+- [ ] Cline scanner
 - [ ] Rust rewrite of indexer for sub-microsecond retrieval
-- [ ] Vector embeddings for semantic search (all-MiniLM-L6-v2)
-- [ ] Aider, Cline scanner support
-- [ ] Auto-consolidation cron job
+- [ ] Built-in auto-consolidation schedule (today: cron, see the installer's output)
 - [ ] Memory health dashboard
 
 ---
