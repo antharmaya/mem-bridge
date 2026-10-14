@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: test (py${{ matrix.python }})
@@ -13,12 +16,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.11 is the floor declared in pyproject; 3.13 catches deprecations early.
-        python: ["3.11", "3.12", "3.13"]
+        # requires-python = ">=3.11"; 3.14 is the newest stable release.
+        python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -31,14 +34,17 @@ jobs:
       - name: pytest
         run: pytest -q
 
+      - name: installer syntax
+        run: bash -n install.sh
+
   package:
-    name: builds and the metadata is valid
+    name: builds, metadata is valid, wheel runs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: build
         run: |
@@ -48,10 +54,14 @@ jobs:
       # Catches a broken README or bad classifiers before a tag makes it
       # permanent. PyPI does not allow re-uploading a version.
       - name: twine check
-        run: twine check dist/*
+        run: twine check --strict dist/*
 
-      - name: the installed console script runs
+      - name: smoke-test the wheel in a fresh venv
         run: |
           python -m venv /tmp/v
           /tmp/v/bin/pip install dist/*.whl
-          /tmp/v/bin/memory-bridge --help
+          cd /tmp
+          /tmp/v/bin/memory-bridge --version
+          HOME=/tmp/home /tmp/v/bin/memory-bridge stats
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+            | HOME=/tmp/home /tmp/v/bin/memory-bridge mcp | grep -q '"serverInfo"'
